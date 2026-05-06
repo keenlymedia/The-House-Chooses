@@ -7,6 +7,8 @@ import {
   REVEAL_DURATION_MS,
   ROLE_DISTRIBUTION,
   S2C,
+  TASK_DURATION_TOLERANCE_MS,
+  TASK_INTERACT_RADIUS,
   buildTileGrid,
   canStand,
   spawnPositions,
@@ -14,11 +16,13 @@ import {
   type PingPayload,
   type RolePayload,
   type SetNamePayload,
+  type TaskIdPayload,
   type TileGrid,
 } from "@house/shared";
 import { MatchState, Player } from "../state/MatchState.js";
 import { generateCode, registerCode, releaseCode } from "./roomCodes.js";
 import { assignRoles, type RoleAssignment } from "../systems/roles.js";
+import { buildTaskSchema, spawnTasksForMatch } from "../systems/tasks.js";
 
 interface JoinOptions {
   name?: string;
@@ -32,13 +36,19 @@ const PLAYER_COLORS = [
 
 const TICK_HZ = 20;
 
+interface Interaction {
+  taskId: string;
+  startedAt: number;
+}
+
 export class MansionRoom extends Room<MatchState> {
   maxClients = MAX_PLAYERS;
   private code = "";
   private grid: TileGrid = buildTileGrid();
   private intents = new Map<string, { dx: number; dy: number }>();
-  // Server-only role table — never put this in MatchState.
+  // Server-only: never put roles or interactions into Colyseus state.
   private roles = new Map<string, RoleAssignment>();
+  private interactions = new Map<string, Interaction>();
 
   onCreate(_options: unknown): void {
     this.code = generateCode();
@@ -48,39 +58,16 @@ export class MansionRoom extends Room<MatchState> {
     state.code = this.code;
     this.setState(state);
 
-    this.onMessage(C2S.SetName, (client, payload: SetNamePayload) => {
-      const player = this.state.players.get(client.sessionId);
-      if (!player) return;
-      const trimmed = (payload?.name ?? "").trim().slice(0, 16);
-      if (trimmed.length === 0) return;
-      player.name = trimmed;
+    this.onMessage(C2S.SetName, (c, p: SetNamePayload) => this.handleSetName(c, p));
+    this.onMessage(C2S.ToggleReady, (c) => this.handleToggleReady(c));
+    this.onMessage(C2S.StartMatch, (c) => this.handleStartMatch(c));
+    this.onMessage(C2S.Move, (c, p: MovePayload) => this.handleMove(c, p));
+    this.onMessage(C2S.Ping, (c, p: PingPayload) => {
+      c.send(S2C.Pong, { t: p?.t ?? 0 });
     });
-
-    this.onMessage(C2S.ToggleReady, (client) => {
-      const player = this.state.players.get(client.sessionId);
-      if (!player) return;
-      if (this.state.phase !== "lobby") return;
-      player.ready = !player.ready;
-    });
-
-    this.onMessage(C2S.StartMatch, (client) => {
-      this.handleStartMatch(client);
-    });
-
-    this.onMessage(C2S.Move, (client, payload: MovePayload) => {
-      const player = this.state.players.get(client.sessionId);
-      if (!player || !player.alive) return;
-      if (this.state.phase !== "playing" && this.state.phase !== "reveal") {
-        return;
-      }
-      const dx = clamp(Number(payload?.dx ?? 0), -1, 1);
-      const dy = clamp(Number(payload?.dy ?? 0), -1, 1);
-      this.intents.set(client.sessionId, { dx, dy });
-    });
-
-    this.onMessage(C2S.Ping, (client, payload: PingPayload) => {
-      client.send(S2C.Pong, { t: payload?.t ?? 0 });
-    });
+    this.onMessage(C2S.TaskStart, (c, p: TaskIdPayload) => this.handleTaskStart(c, p));
+    this.onMessage(C2S.TaskCancel, (c) => this.handleTaskCancel(c));
+    this.onMessage(C2S.TaskFinish, (c, p: TaskIdPayload) => this.handleTaskFinish(c, p));
 
     this.setSimulationInterval((dt) => this.tick(dt / 1000), 1000 / TICK_HZ);
 
@@ -101,8 +88,6 @@ export class MansionRoom extends Room<MatchState> {
     this.state.players.set(client.sessionId, player);
     this.intents.set(client.sessionId, { dx: 0, dy: 0 });
 
-    // Reconnect/late-join: if a match is in progress and this id has a role,
-    // re-send it. (We don't currently persist sessions; this is forward-looking.)
     const existing = this.roles.get(client.sessionId);
     if (existing) this.sendRole(client, existing);
 
@@ -118,6 +103,7 @@ export class MansionRoom extends Room<MatchState> {
     this.state.players.delete(client.sessionId);
     this.intents.delete(client.sessionId);
     this.roles.delete(client.sessionId);
+    this.interactions.delete(client.sessionId);
 
     if (wasHost) {
       const next = this.state.players.values().next().value;
@@ -132,7 +118,31 @@ export class MansionRoom extends Room<MatchState> {
     console.log(`[room ${this.roomId}] disposed (code ${this.code} freed)`);
   }
 
-  // --- match start ---------------------------------------------------------
+  // --- handlers ------------------------------------------------------------
+
+  private handleSetName(client: Client, payload: SetNamePayload): void {
+    const player = this.state.players.get(client.sessionId);
+    if (!player) return;
+    const trimmed = (payload?.name ?? "").trim().slice(0, 16);
+    if (!trimmed) return;
+    player.name = trimmed;
+  }
+
+  private handleToggleReady(client: Client): void {
+    const player = this.state.players.get(client.sessionId);
+    if (!player) return;
+    if (this.state.phase !== "lobby") return;
+    player.ready = !player.ready;
+  }
+
+  private handleMove(client: Client, payload: MovePayload): void {
+    const player = this.state.players.get(client.sessionId);
+    if (!player || !player.alive) return;
+    if (this.state.phase !== "playing" && this.state.phase !== "reveal") return;
+    const dx = clamp(Number(payload?.dx ?? 0), -1, 1);
+    const dy = clamp(Number(payload?.dy ?? 0), -1, 1);
+    this.intents.set(client.sessionId, { dx, dy });
+  }
 
   private handleStartMatch(client: Client): void {
     const requester = this.state.players.get(client.sessionId);
@@ -165,11 +175,78 @@ export class MansionRoom extends Room<MatchState> {
       if (assignment) this.sendRole(c, assignment);
     }
 
+    this.spawnTasks();
+
     this.state.phase = "reveal";
     this.clock.setTimeout(() => {
       if (this.state.phase === "reveal") this.state.phase = "playing";
     }, REVEAL_DURATION_MS);
   }
+
+  private spawnTasks(): void {
+    this.state.tasks.clear();
+    const specs = spawnTasksForMatch(this.grid);
+    for (const spec of specs) {
+      this.state.tasks.set(spec.id, buildTaskSchema(spec));
+    }
+    this.state.totalTasks = specs.length;
+    this.state.sealProgress = 0;
+  }
+
+  private handleTaskStart(client: Client, payload: TaskIdPayload): void {
+    if (this.state.phase !== "playing") return;
+    const player = this.state.players.get(client.sessionId);
+    if (!player?.alive) return;
+    const task = this.state.tasks.get(payload?.taskId ?? "");
+    if (!task || task.complete) return;
+    if (!withinReach(player, task)) return;
+    this.interactions.set(client.sessionId, {
+      taskId: task.id,
+      startedAt: Date.now(),
+    });
+  }
+
+  private handleTaskCancel(client: Client): void {
+    this.interactions.delete(client.sessionId);
+  }
+
+  private handleTaskFinish(client: Client, payload: TaskIdPayload): void {
+    if (this.state.phase !== "playing") return;
+    const interaction = this.interactions.get(client.sessionId);
+    if (!interaction) return;
+    if (interaction.taskId !== payload?.taskId) return;
+
+    const player = this.state.players.get(client.sessionId);
+    const task = this.state.tasks.get(interaction.taskId);
+    this.interactions.delete(client.sessionId);
+    if (!player?.alive || !task || task.complete) return;
+    if (!withinReach(player, task)) return;
+
+    const elapsed = Date.now() - interaction.startedAt;
+    if (elapsed < task.durationMs - TASK_DURATION_TOLERANCE_MS) {
+      // Too fast to be a real hold — likely cheat or desync. Silently drop.
+      return;
+    }
+
+    const role = this.roles.get(client.sessionId)?.role;
+    if (role !== "survivor") {
+      // Corrupted/Vessel "completed" the animation. No real progress.
+      return;
+    }
+
+    task.complete = true;
+    const completed = countCompleted(this.state);
+    this.state.sealProgress = Math.round(
+      (completed / Math.max(1, this.state.totalTasks)) * 100,
+    );
+
+    if (this.state.sealProgress >= 100) {
+      this.state.phase = "ended";
+      this.state.winner = "survivors";
+    }
+  }
+
+  // --- internals -----------------------------------------------------------
 
   private sendRole(client: Client, assignment: RoleAssignment): void {
     const payload: RolePayload = {
@@ -179,12 +256,8 @@ export class MansionRoom extends Room<MatchState> {
     client.send(S2C.Role, payload);
   }
 
-  // --- simulation ----------------------------------------------------------
-
   private tick(dt: number): void {
-    if (this.state.phase !== "playing" && this.state.phase !== "reveal") {
-      return;
-    }
+    if (this.state.phase !== "playing" && this.state.phase !== "reveal") return;
     for (const [id, player] of this.state.players) {
       const intent = this.intents.get(id);
       if (!intent || (intent.dx === 0 && intent.dy === 0)) continue;
@@ -199,6 +272,15 @@ export class MansionRoom extends Room<MatchState> {
       if (canStand(this.grid, tryX, player.y)) player.x = tryX;
       const tryY = player.y + stepY;
       if (canStand(this.grid, player.x, tryY)) player.y = tryY;
+
+      // Moving cancels any in-progress task interaction.
+      const inter = this.interactions.get(id);
+      if (inter) {
+        const task = this.state.tasks.get(inter.taskId);
+        if (!task || !withinReach(player, task)) {
+          this.interactions.delete(id);
+        }
+      }
     }
   }
 
@@ -215,6 +297,21 @@ export class MansionRoom extends Room<MatchState> {
     }
     return positions[0];
   }
+}
+
+function withinReach(
+  player: { x: number; y: number },
+  task: { x: number; y: number },
+): boolean {
+  return Math.hypot(player.x - task.x, player.y - task.y) <= TASK_INTERACT_RADIUS;
+}
+
+function countCompleted(state: MatchState): number {
+  let n = 0;
+  state.tasks.forEach((t) => {
+    if (t.complete) n++;
+  });
+  return n;
 }
 
 function clamp(n: number, lo: number, hi: number): number {

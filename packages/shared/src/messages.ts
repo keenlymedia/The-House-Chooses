@@ -5,6 +5,9 @@ export const C2S = {
   StartMatch: "startMatch",
   Move: "move",
   Ping: "ping",
+  TaskStart: "taskStart",
+  TaskCancel: "taskCancel",
+  TaskFinish: "taskFinish",
 } as const;
 
 // Server → client message types
@@ -40,4 +43,8 @@ export interface PingPayload {
 
 export interface PongPayload {
   t: number;
+}
+
+export interface TaskIdPayload {
+  taskId: string;
 }
