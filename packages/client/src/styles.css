@@ -398,6 +398,62 @@ button.secondary:hover:not(:disabled) {
   background: linear-gradient(90deg, #6b1f1f, #ff5e5e);
 }
 
+.hud-meter-fill.fear {
+  background: linear-gradient(90deg, #2a2530, #ff9c9c);
+}
+
+.fear-uneasy .game-canvas {
+  filter: hue-rotate(8deg) saturate(0.95) contrast(1.05);
+  transition: filter 600ms ease;
+}
+
+.fear-shaken .game-canvas {
+  filter: hue-rotate(-12deg) saturate(0.85) contrast(1.1) blur(0.4px);
+  transition: filter 600ms ease;
+}
+
+.fear-panic .game-canvas {
+  filter: hue-rotate(-30deg) saturate(0.65) contrast(1.15) blur(0.9px);
+  transition: filter 600ms ease;
+  animation: panicShake 1.6s ease-in-out infinite;
+}
+
+@keyframes panicShake {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  25% {
+    transform: translate(-1px, 1px);
+  }
+  50% {
+    transform: translate(1px, -1px);
+  }
+  75% {
+    transform: translate(-1px, -1px);
+  }
+}
+
+.fear-shaken::before,
+.fear-panic::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      circle at 18% 28%,
+      rgba(255, 156, 156, 0.05) 0,
+      transparent 30%
+    ),
+    radial-gradient(
+      circle at 78% 72%,
+      rgba(196, 94, 255, 0.06) 0,
+      transparent 28%
+    );
+  z-index: 5;
+}
+
 .lights-out-vignette {
   position: absolute;
   inset: 0;
@@ -560,6 +616,396 @@ button.secondary:hover:not(:disabled) {
   font-size: 10px;
   color: #8c869a;
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+.meeting-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 4, 8, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 80;
+  backdrop-filter: blur(6px);
+  animation: revealIn 240ms ease-out;
+}
+
+.meeting-card {
+  width: min(560px, 92vw);
+  padding: 26px 24px;
+  background: #0d0c10;
+  border: 1px solid #2a2530;
+  border-radius: 14px;
+}
+
+.meeting-eyebrow {
+  text-align: center;
+  font-size: 10px;
+  letter-spacing: 0.4em;
+  text-transform: uppercase;
+  color: #6b6478;
+  margin-bottom: 10px;
+}
+
+.meeting-header {
+  text-align: center;
+  font-size: 18px;
+  letter-spacing: 0.04em;
+  margin-bottom: 6px;
+}
+
+.meeting-timer {
+  text-align: center;
+  font-size: 12px;
+  color: #c45eff;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  margin-bottom: 16px;
+}
+
+.meeting-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.meeting-tile {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: #15131a;
+  border: 1px solid #2a2530;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #e8e6ea;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition: border-color 120ms ease;
+}
+
+.meeting-tile:hover:not(:disabled) {
+  border-color: #6b3fa0;
+}
+
+.meeting-tile:disabled {
+  cursor: default;
+}
+
+.meeting-tile.out {
+  opacity: 0.45;
+  filter: grayscale(0.7);
+}
+
+.meeting-tile.selected {
+  border-color: #c45eff !important;
+  background: #1a132a;
+}
+
+.meeting-pip {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.meeting-name {
+  flex: 1;
+}
+
+.meeting-tag {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #8c869a;
+  padding: 2px 6px;
+  background: #2a2530;
+  border-radius: 3px;
+}
+
+.meeting-tag.voted {
+  background: #2f6b3f;
+  color: #d6ffd6;
+}
+
+.meeting-skip {
+  width: 100%;
+  padding: 10px;
+  background: transparent;
+  border: 1px dashed #6b6478;
+  color: #c8c4d0;
+  border-radius: 8px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+}
+
+.meeting-skip:hover:not(:disabled) {
+  border-color: #c45eff;
+  color: #d3b3ff;
+}
+
+.meeting-skip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.meeting-skip.selected {
+  border-color: #c45eff;
+  background: #1a132a;
+}
+
+.meeting-spectator {
+  text-align: center;
+  margin-top: 10px;
+  font-size: 12px;
+  color: #6b6478;
+  font-style: italic;
+}
+
+.ritual-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 4, 8, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 80;
+  backdrop-filter: blur(8px);
+  animation: revealIn 320ms ease-out;
+}
+
+.ritual-card {
+  width: min(620px, 92vw);
+  padding: 28px 26px;
+  background: #0d0c10;
+  border: 2px solid #6b3fa0;
+  border-radius: 14px;
+  box-shadow: 0 20px 60px rgba(107, 63, 160, 0.25);
+}
+
+.ritual-tracks {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #8c869a;
+  margin-bottom: 18px;
+}
+
+.ritual-track {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ritual-track-pips {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.pip {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #2a2530;
+}
+
+.pip.seal.on {
+  background: #c45eff;
+  box-shadow: 0 0 6px rgba(196, 94, 255, 0.6);
+}
+
+.pip.awaken.on {
+  background: #ff5e5e;
+  box-shadow: 0 0 6px rgba(255, 94, 94, 0.6);
+}
+
+.ritual-eyebrow {
+  text-align: center;
+  font-size: 10px;
+  letter-spacing: 0.4em;
+  text-transform: uppercase;
+  color: #6b6478;
+  margin-bottom: 10px;
+}
+
+.ritual-header {
+  text-align: center;
+  font-size: 18px;
+  letter-spacing: 0.04em;
+  margin-bottom: 12px;
+}
+
+.ritual-timer {
+  text-align: center;
+  font-size: 12px;
+  color: #c45eff;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  margin-bottom: 16px;
+}
+
+.ritual-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.ritual-tile {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: #15131a;
+  border: 1px solid #2a2530;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #e8e6ea;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+}
+
+.ritual-tile:hover {
+  border-color: #6b3fa0;
+}
+
+.ritual-wait {
+  text-align: center;
+  padding: 30px 0 10px;
+  color: #8c869a;
+  font-style: italic;
+  font-size: 14px;
+}
+
+.ritual-vote-row {
+  display: flex;
+  gap: 12px;
+  margin: 6px 0 12px;
+}
+
+.ritual-vote {
+  flex: 1;
+  padding: 14px;
+  border: 2px solid;
+  border-radius: 10px;
+  background: transparent;
+  color: #e8e6ea;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ritual-vote.approve {
+  border-color: #2f6b3f;
+  color: #7bff5e;
+}
+
+.ritual-vote.approve:hover:not(:disabled) {
+  background: rgba(47, 107, 63, 0.2);
+}
+
+.ritual-vote.reject {
+  border-color: #6b1f1f;
+  color: #ff5e5e;
+}
+
+.ritual-vote.reject:hover:not(:disabled) {
+  background: rgba(107, 31, 31, 0.2);
+}
+
+.ritual-vote.selected {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.ritual-vote:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.ritual-voted {
+  text-align: center;
+  font-size: 11px;
+  color: #6b6478;
+  letter-spacing: 0.1em;
+}
+
+.ritual-cards {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+
+.ritual-card-tile {
+  flex: 1;
+  max-width: 160px;
+  aspect-ratio: 2/3;
+  border: 2px solid;
+  border-radius: 10px;
+  background: #0d0c10;
+  color: #e8e6ea;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 18px;
+  font-family: inherit;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.ritual-card-tile.seal {
+  border-color: #6b3fa0;
+  color: #d3b3ff;
+}
+
+.ritual-card-tile.seal:hover {
+  background: rgba(107, 63, 160, 0.15);
+}
+
+.ritual-card-tile.awakening {
+  border-color: #6b1f1f;
+  color: #ff9c9c;
+}
+
+.ritual-card-tile.awakening:hover {
+  background: rgba(107, 31, 31, 0.15);
+}
+
+.ritual-card-action {
+  font-size: 10px;
+  color: #6b6478;
+  letter-spacing: 0.1em;
+}
+
+.ritual-resolution {
+  text-align: center;
+  padding: 30px 0 10px;
+  font-size: 22px;
+  letter-spacing: 0.06em;
+}
+
+.outcome-seal {
+  color: #d3b3ff;
+}
+
+.outcome-awakening {
+  color: #ff9c9c;
+}
+
+.outcome-rejected,
+.outcome-vessel_witness {
+  color: #c8c4d0;
+  font-style: italic;
 }
 
 .interact-prompt {

@@ -53,6 +53,14 @@ export const DOOR_TILES: ReadonlyArray<readonly [number, number]> = [
   [29, 21], [30, 21],
 ];
 
+// Foyer bell — the only place a player can call an emergency meeting from.
+// Tile coordinate inside the Foyer room, converted to world px below.
+export const FOYER_BELL_TILE: readonly [number, number] = [19, 12];
+export const FOYER_BELL = {
+  x: FOYER_BELL_TILE[0] * 32 + 16,
+  y: FOYER_BELL_TILE[1] * 32 + 16,
+};
+
 export const SPAWN_POINTS: ReadonlyArray<readonly [number, number]> = [
   // around foyer center, in tile coords
   [19, 13], [20, 13], [18, 13],

@@ -2,11 +2,38 @@ import { useEffect, useState } from "react";
 import type { Room } from "colyseus.js";
 import type { SabotageType } from "@house/shared";
 
-interface PlayerView {
+export interface PlayerView {
   id: string;
   name: string;
+  color: string;
   isHost: boolean;
   ready: boolean;
+  alive: boolean;
+  banished: boolean;
+  fear: number;
+}
+
+export interface MeetingView {
+  calledBy: string;
+  discussionEndsAt: number;
+  voteEndsAt: number;
+  lastBanishedId: string;
+  voters: Set<string>;
+  selfVote: string | null;
+}
+
+export interface RitualView {
+  subPhase: string;
+  leaderId: string;
+  witnessId: string;
+  voteEndsAt: number;
+  drawEndsAt: number;
+  failedVotes: number;
+  sealCount: number;
+  awakenCount: number;
+  publicOutcome: string;
+  voters: Set<string>;
+  selfVote: "approve" | "reject" | null;
 }
 
 export interface RoomView {
@@ -20,6 +47,8 @@ export interface RoomView {
   sabotageCooldowns: Map<SabotageType, number>;
   winner: string;
   players: PlayerView[];
+  meeting: MeetingView;
+  ritual: RitualView;
   selfId: string;
 }
 
@@ -39,20 +68,58 @@ export function useRoomState(room: Room): RoomView | null {
         winner: string;
         players: { forEach: (cb: (p: PlayerView) => void) => void };
         sabotageCooldowns: { forEach: (cb: (v: number, k: string) => void) => void };
+        meeting: {
+          calledBy: string;
+          discussionEndsAt: number;
+          voteEndsAt: number;
+          lastBanishedId: string;
+          votes: { forEach: (cb: (v: string, k: string) => void) => void };
+        };
+        ritual: {
+          subPhase: string;
+          leaderId: string;
+          witnessId: string;
+          voteEndsAt: number;
+          drawEndsAt: number;
+          failedVotes: number;
+          sealCount: number;
+          awakenCount: number;
+          publicOutcome: string;
+          votes: { forEach: (cb: (v: string, k: string) => void) => void };
+        };
       };
       const players: PlayerView[] = [];
       state.players.forEach((p) => {
         players.push({
           id: p.id,
           name: p.name,
+          color: p.color,
           isHost: p.isHost,
           ready: p.ready,
+          alive: p.alive,
+          banished: p.banished,
+          fear: p.fear,
         });
       });
       const cooldowns = new Map<SabotageType, number>();
       state.sabotageCooldowns?.forEach((v, k) =>
         cooldowns.set(k as SabotageType, v),
       );
+      const meetingVoters = new Set<string>();
+      let selfMeetingVote: string | null = null;
+      state.meeting?.votes.forEach((target, voterId) => {
+        meetingVoters.add(voterId);
+        if (voterId === room.sessionId) selfMeetingVote = target;
+      });
+      const ritualVoters = new Set<string>();
+      let selfRitualVote: "approve" | "reject" | null = null;
+      state.ritual?.votes.forEach((vote, voterId) => {
+        ritualVoters.add(voterId);
+        if (voterId === room.sessionId) {
+          selfRitualVote =
+            vote === "approve" || vote === "reject" ? vote : null;
+        }
+      });
       return {
         code: state.code,
         phase: state.phase,
@@ -64,6 +131,27 @@ export function useRoomState(room: Room): RoomView | null {
         sabotageCooldowns: cooldowns,
         winner: state.winner ?? "",
         players,
+        meeting: {
+          calledBy: state.meeting?.calledBy ?? "",
+          discussionEndsAt: state.meeting?.discussionEndsAt ?? 0,
+          voteEndsAt: state.meeting?.voteEndsAt ?? 0,
+          lastBanishedId: state.meeting?.lastBanishedId ?? "",
+          voters: meetingVoters,
+          selfVote: selfMeetingVote,
+        },
+        ritual: {
+          subPhase: state.ritual?.subPhase ?? "",
+          leaderId: state.ritual?.leaderId ?? "",
+          witnessId: state.ritual?.witnessId ?? "",
+          voteEndsAt: state.ritual?.voteEndsAt ?? 0,
+          drawEndsAt: state.ritual?.drawEndsAt ?? 0,
+          failedVotes: state.ritual?.failedVotes ?? 0,
+          sealCount: state.ritual?.sealCount ?? 0,
+          awakenCount: state.ritual?.awakenCount ?? 0,
+          publicOutcome: state.ritual?.publicOutcome ?? "",
+          voters: ritualVoters,
+          selfVote: selfRitualVote,
+        },
         selfId: room.sessionId,
       };
     }

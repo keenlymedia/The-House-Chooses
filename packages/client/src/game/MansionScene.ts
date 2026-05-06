@@ -1,8 +1,10 @@
 import Phaser from "phaser";
 import type { Room } from "colyseus.js";
 import {
+  BELL_INTERACT_RADIUS,
   C2S,
   DOOR_TILES,
+  FOYER_BELL,
   MAP_HEIGHT,
   MAP_WIDTH,
   PLAYER_RADIUS,
@@ -70,6 +72,8 @@ export class MansionScene extends Phaser.Scene {
   private sprites = new Map<string, PlayerSprite>();
   private taskMarkers = new Map<string, TaskMarker>();
   private doorOverlays: Phaser.GameObjects.Rectangle[] = [];
+  private fearGhosts: Phaser.GameObjects.Arc[] = [];
+  private fearGhostSwapAt = 0;
   private keys!: Record<"W" | "A" | "S" | "D" | "E", Phaser.Input.Keyboard.Key>;
   private lastSentDx = 0;
   private lastSentDy = 0;
@@ -170,6 +174,22 @@ export class MansionScene extends Phaser.Scene {
         .setStrokeStyle(0, DOOR_LOCK_COLOR, 0);
       this.doorOverlays.push(r);
     }
+
+    // Foyer bell.
+    const bellRing = this.add.circle(
+      FOYER_BELL.x,
+      FOYER_BELL.y,
+      BELL_INTERACT_RADIUS,
+    );
+    bellRing.setStrokeStyle(1, 0xc45eff, 0.4);
+    this.add.circle(FOYER_BELL.x, FOYER_BELL.y, 8, 0xc45eff);
+    this.add
+      .text(FOYER_BELL.x, FOYER_BELL.y - 18, "BELL", {
+        fontFamily: "ui-sans-serif, system-ui",
+        fontSize: "9px",
+        color: "#c45eff",
+      })
+      .setOrigin(0.5);
   }
 
   update(_t: number, dtMs: number): void {
@@ -179,7 +199,50 @@ export class MansionScene extends Phaser.Scene {
     this.handleInput();
     this.lerpSprites(dtMs);
     this.tickInteraction();
+    this.tickFearGhosts(performance.now());
     this.ping(dtMs);
+  }
+
+  private tickFearGhosts(now: number): void {
+    const players = this.room.state.players as unknown as
+      | { get?: (id: string) => { fear: number } | undefined }
+      | undefined;
+    const me = players?.get?.(this.room.sessionId);
+    const fear = me?.fear ?? 0;
+
+    if (fear < 70) {
+      if (this.fearGhosts.length > 0) {
+        for (const g of this.fearGhosts) g.destroy();
+        this.fearGhosts = [];
+      }
+      return;
+    }
+    if (now < this.fearGhostSwapAt) return;
+
+    for (const g of this.fearGhosts) g.destroy();
+    this.fearGhosts = [];
+
+    const count = fear >= 90 ? 4 : 2;
+    for (let i = 0; i < count; i++) {
+      const room = ROOMS[Math.floor(Math.random() * ROOMS.length)];
+      const tx = room.x + 1 + Math.floor(Math.random() * Math.max(1, room.w - 2));
+      const ty = room.y + 1 + Math.floor(Math.random() * Math.max(1, room.h - 2));
+      const x = tx * TILE + TILE / 2;
+      const y = ty * TILE + TILE / 2;
+      const ghost = this.add.circle(x, y, 6, TASK_COLOR, 0.35);
+      ghost.setStrokeStyle(1, TASK_COLOR, 0.25);
+      ghost.setDepth(-2);
+      this.tweens.add({
+        targets: ghost,
+        alpha: 0.05,
+        duration: 1200,
+        yoyo: true,
+        repeat: -1,
+        ease: "Sine.easeInOut",
+      });
+      this.fearGhosts.push(ghost);
+    }
+    this.fearGhostSwapAt = now + 3500;
   }
 
   private reconcileDoors(): void {
@@ -299,22 +362,42 @@ export class MansionScene extends Phaser.Scene {
     }
 
     const nearby = this.findNearestTask();
-    this.interaction.setPrompt(
-      !this.activeInteraction && nearby
-        ? `Hold E — ${TASK_LABELS[nearby.type]}`
-        : null,
-    );
+    const nearBell = this.isNearBell();
+    if (this.activeInteraction) {
+      this.interaction.setPrompt(null);
+    } else if (nearby) {
+      this.interaction.setPrompt(`Hold E — ${TASK_LABELS[nearby.type]}`);
+    } else if (nearBell) {
+      this.interaction.setPrompt("Press E — Call Meeting");
+    } else {
+      this.interaction.setPrompt(null);
+    }
 
     const eDown = this.keys.E.isDown;
+    const ePressed = Phaser.Input.Keyboard.JustDown(this.keys.E);
+
+    // Bell press is one-shot and only when no task is in range.
+    if (ePressed && !nearby && nearBell && !this.activeInteraction) {
+      this.room.send(C2S.CallMeeting, {});
+    }
+
     if (eDown && !this.activeInteraction && nearby && !nearby.complete) {
       this.startInteraction(nearby);
     } else if (!eDown && this.activeInteraction) {
       this.cancelInteraction();
     } else if (this.activeInteraction) {
-      // If we wandered away, cancel.
       const stillNear = nearby && nearby.id === this.activeInteraction.taskId;
       if (!stillNear) this.cancelInteraction();
     }
+  }
+
+  private isNearBell(): boolean {
+    const me = this.sprites.get(this.room.sessionId);
+    if (!me) return false;
+    return (
+      Math.hypot(me.body.x - FOYER_BELL.x, me.body.y - FOYER_BELL.y) <=
+      BELL_INTERACT_RADIUS
+    );
   }
 
   private findNearestTask(): ServerTask | null {

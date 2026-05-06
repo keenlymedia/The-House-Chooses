@@ -6,6 +6,8 @@ import { useRoomState } from "./useRoomState.js";
 import { RoleReveal } from "./RoleReveal.js";
 import { SabotagePanel } from "./SabotagePanel.js";
 import { Whispers } from "./Whispers.js";
+import { MeetingOverlay } from "./MeetingOverlay.js";
+import { RitualOverlay } from "./RitualOverlay.js";
 
 interface Props {
   room: Room;
@@ -55,12 +57,19 @@ export function GameScreen({ room, role }: Props) {
   const showReveal = role != null && view?.phase === "reveal";
   const showEnded = view?.phase === "ended";
   const isCorrupted = role?.role === "corrupted";
+  const inMeeting =
+    view?.phase === "meeting" || view?.phase === "voting";
+  const inRitual = view?.phase === "ritual";
+  const self = view?.players.find((p) => p.id === view.selfId);
+  const selfAlive = !!self?.alive && !self?.banished;
+  const selfFear = self?.fear ?? 0;
+  const fearTier = fearTierFor(selfFear);
 
   const lightsOutMs = (view?.lightsOutExpiresAt ?? 0) - now;
   const doorLockMs = (view?.doorLockExpiresAt ?? 0) - now;
 
   return (
-    <div className="game-shell">
+    <div className={`game-shell fear-${fearTier}`}>
       <div ref={containerRef} className="game-canvas" />
 
       {lightsOutMs > 0 && <div className="lights-out-vignette" />}
@@ -112,6 +121,18 @@ export function GameScreen({ room, role }: Props) {
             />
           </div>
         </div>
+        <div className="hud-meter">
+          <div className="hud-meter-label">
+            <span>Fear {fearTier === "panic" && <em>· panicked</em>}</span>
+            <span>{Math.round(selfFear)}%</span>
+          </div>
+          <div className="hud-meter-bar">
+            <div
+              className="hud-meter-fill fear"
+              style={{ width: `${selfFear}%` }}
+            />
+          </div>
+        </div>
       </div>
 
       {role && (
@@ -155,8 +176,30 @@ export function GameScreen({ room, role }: Props) {
 
       <Whispers room={room} />
 
-      {isCorrupted && view && (
+      {isCorrupted && view && !inMeeting && !inRitual && (
         <SabotagePanel room={room} cooldowns={view.sabotageCooldowns} />
+      )}
+
+      {inMeeting && view && (
+        <MeetingOverlay
+          room={room}
+          view={view}
+          selfAlive={selfAlive}
+          voters={view.meeting.voters}
+          selfVote={view.meeting.selfVote}
+          players={view.players}
+          meeting={view.meeting}
+        />
+      )}
+
+      {inRitual && view && (
+        <RitualOverlay
+          room={room}
+          view={view}
+          ritual={view.ritual}
+          players={view.players}
+          selfId={view.selfId}
+        />
       )}
 
       {showReveal && <RoleReveal payload={role} playerNames={playerNames} />}
@@ -181,4 +224,11 @@ function roleColor(role: RolePayload["role"]): string {
   if (role === "survivor") return "#7bff5e";
   if (role === "corrupted") return "#ff5e5e";
   return "#c45eff";
+}
+
+function fearTierFor(fear: number): "calm" | "uneasy" | "shaken" | "panic" {
+  if (fear >= 90) return "panic";
+  if (fear >= 70) return "shaken";
+  if (fear >= 40) return "uneasy";
+  return "calm";
 }
