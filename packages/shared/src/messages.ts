@@ -15,6 +15,12 @@ export const S2C = {
   Pong: "pong",
 } as const;
 
+export interface RolePayload {
+  role: "survivor" | "corrupted" | "vessel";
+  // Other player ids this player is allowed to know about (e.g. fellow Corrupted + Vessel).
+  teammates: string[];
+}
+
 export type C2SType = (typeof C2S)[keyof typeof C2S];
 export type S2CType = (typeof S2C)[keyof typeof S2C];
 

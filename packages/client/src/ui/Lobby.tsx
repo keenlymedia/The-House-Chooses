@@ -21,7 +21,7 @@ export function Lobby({ room, onStart, onLeave }: Props) {
   }, [room]);
 
   useEffect(() => {
-    if (view?.phase === "playing") onStart();
+    if (view?.phase === "reveal" || view?.phase === "playing") onStart();
   }, [view?.phase, onStart]);
 
   if (!view) return <div className="shell">Connecting…</div>;
@@ -110,6 +110,8 @@ function humanizeError(reason: string): string {
       return `Need at least ${MIN_PLAYERS} players to start.`;
     case "not_all_ready":
       return "Everyone has to ready up first.";
+    case "unsupported_player_count":
+      return "That player count isn't supported. Need 6–12 players.";
     default:
       return reason;
   }

@@ -4,17 +4,21 @@ import {
   MAX_PLAYERS,
   MIN_PLAYERS,
   PLAYER_SPEED,
+  REVEAL_DURATION_MS,
+  ROLE_DISTRIBUTION,
   S2C,
   buildTileGrid,
   canStand,
   spawnPositions,
   type MovePayload,
   type PingPayload,
+  type RolePayload,
   type SetNamePayload,
   type TileGrid,
 } from "@house/shared";
 import { MatchState, Player } from "../state/MatchState.js";
 import { generateCode, registerCode, releaseCode } from "./roomCodes.js";
+import { assignRoles, type RoleAssignment } from "../systems/roles.js";
 
 interface JoinOptions {
   name?: string;
@@ -33,6 +37,8 @@ export class MansionRoom extends Room<MatchState> {
   private code = "";
   private grid: TileGrid = buildTileGrid();
   private intents = new Map<string, { dx: number; dy: number }>();
+  // Server-only role table — never put this in MatchState.
+  private roles = new Map<string, RoleAssignment>();
 
   onCreate(_options: unknown): void {
     this.code = generateCode();
@@ -58,30 +64,15 @@ export class MansionRoom extends Room<MatchState> {
     });
 
     this.onMessage(C2S.StartMatch, (client) => {
-      const player = this.state.players.get(client.sessionId);
-      if (!player?.isHost) {
-        client.send(S2C.Error, { reason: "not_host" });
-        return;
-      }
-      if (this.state.phase !== "lobby") return;
-      if (this.state.players.size < MIN_PLAYERS) {
-        client.send(S2C.Error, { reason: "need_more_players" });
-        return;
-      }
-      const allReady = Array.from(this.state.players.values()).every(
-        (p) => p.ready || p.isHost,
-      );
-      if (!allReady) {
-        client.send(S2C.Error, { reason: "not_all_ready" });
-        return;
-      }
-      this.state.phase = "playing";
-      // Role assignment + match systems land in step 4.
+      this.handleStartMatch(client);
     });
 
     this.onMessage(C2S.Move, (client, payload: MovePayload) => {
       const player = this.state.players.get(client.sessionId);
       if (!player || !player.alive) return;
+      if (this.state.phase !== "playing" && this.state.phase !== "reveal") {
+        return;
+      }
       const dx = clamp(Number(payload?.dx ?? 0), -1, 1);
       const dy = clamp(Number(payload?.dy ?? 0), -1, 1);
       this.intents.set(client.sessionId, { dx, dy });
@@ -110,6 +101,11 @@ export class MansionRoom extends Room<MatchState> {
     this.state.players.set(client.sessionId, player);
     this.intents.set(client.sessionId, { dx: 0, dy: 0 });
 
+    // Reconnect/late-join: if a match is in progress and this id has a role,
+    // re-send it. (We don't currently persist sessions; this is forward-looking.)
+    const existing = this.roles.get(client.sessionId);
+    if (existing) this.sendRole(client, existing);
+
     console.log(
       `[room ${this.roomId}] +${player.name} (${client.sessionId}) host=${player.isHost}`,
     );
@@ -121,6 +117,7 @@ export class MansionRoom extends Room<MatchState> {
     const wasHost = leaving.isHost;
     this.state.players.delete(client.sessionId);
     this.intents.delete(client.sessionId);
+    this.roles.delete(client.sessionId);
 
     if (wasHost) {
       const next = this.state.players.values().next().value;
@@ -135,19 +132,69 @@ export class MansionRoom extends Room<MatchState> {
     console.log(`[room ${this.roomId}] disposed (code ${this.code} freed)`);
   }
 
+  // --- match start ---------------------------------------------------------
+
+  private handleStartMatch(client: Client): void {
+    const requester = this.state.players.get(client.sessionId);
+    if (!requester?.isHost) {
+      client.send(S2C.Error, { reason: "not_host" });
+      return;
+    }
+    if (this.state.phase !== "lobby") return;
+    if (this.state.players.size < MIN_PLAYERS) {
+      client.send(S2C.Error, { reason: "need_more_players" });
+      return;
+    }
+    if (!ROLE_DISTRIBUTION[this.state.players.size]) {
+      client.send(S2C.Error, { reason: "unsupported_player_count" });
+      return;
+    }
+    const allReady = Array.from(this.state.players.values()).every(
+      (p) => p.ready || p.isHost,
+    );
+    if (!allReady) {
+      client.send(S2C.Error, { reason: "not_all_ready" });
+      return;
+    }
+
+    const ids = Array.from(this.state.players.keys());
+    this.roles = assignRoles(ids);
+
+    for (const c of this.clients) {
+      const assignment = this.roles.get(c.sessionId);
+      if (assignment) this.sendRole(c, assignment);
+    }
+
+    this.state.phase = "reveal";
+    this.clock.setTimeout(() => {
+      if (this.state.phase === "reveal") this.state.phase = "playing";
+    }, REVEAL_DURATION_MS);
+  }
+
+  private sendRole(client: Client, assignment: RoleAssignment): void {
+    const payload: RolePayload = {
+      role: assignment.role,
+      teammates: assignment.teammates,
+    };
+    client.send(S2C.Role, payload);
+  }
+
+  // --- simulation ----------------------------------------------------------
+
   private tick(dt: number): void {
+    if (this.state.phase !== "playing" && this.state.phase !== "reveal") {
+      return;
+    }
     for (const [id, player] of this.state.players) {
       const intent = this.intents.get(id);
       if (!intent || (intent.dx === 0 && intent.dy === 0)) continue;
       if (!player.alive) continue;
 
-      // Normalize diagonal so speed is constant.
       const len = Math.hypot(intent.dx, intent.dy) || 1;
       const step = PLAYER_SPEED * dt;
       const stepX = (intent.dx / len) * step;
       const stepY = (intent.dy / len) * step;
 
-      // Resolve axes independently for wall-sliding.
       const tryX = player.x + stepX;
       if (canStand(this.grid, tryX, player.y)) player.x = tryX;
       const tryY = player.y + stepY;
@@ -162,11 +209,7 @@ export class MansionRoom extends Room<MatchState> {
       y: p.y,
     }));
     for (const pos of positions) {
-      if (
-        !taken.some(
-          (t) => Math.hypot(t.x - pos.x, t.y - pos.y) < 16,
-        )
-      ) {
+      if (!taken.some((t) => Math.hypot(t.x - pos.x, t.y - pos.y) < 16)) {
         return pos;
       }
     }
