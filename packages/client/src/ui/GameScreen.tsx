@@ -14,6 +14,7 @@ import { Whispers } from "./Whispers.js";
 import { MeetingOverlay } from "./MeetingOverlay.js";
 import { RitualOverlay } from "./RitualOverlay.js";
 import { EndScreen } from "./EndScreen.js";
+import { audio } from "../audio/cues.js";
 
 interface Props {
   room: Room;
@@ -54,6 +55,39 @@ export function GameScreen({ room, role, reveal }: Props) {
     return () => window.clearInterval(id);
   }, []);
 
+  // Phase-driven audio cues. Track previous phase to fire on transition.
+  const prevPhaseRef = useRef<string | null>(null);
+  useEffect(() => {
+    audio.resume();
+    const phase = view?.phase ?? null;
+    const prev = prevPhaseRef.current;
+    if (phase && phase !== prev) {
+      if (phase === "meeting") audio.alarm();
+      else if (phase === "ritual") audio.chime("up");
+      else if (phase === "ended") audio.chime("down");
+    }
+    prevPhaseRef.current = phase;
+  }, [view?.phase]);
+
+  // Heartbeat at high fear. Period scales from ~1.4s at 60% fear to ~0.55s at 100%.
+  useEffect(() => {
+    const fear = view?.players.find((p) => p.id === view.selfId)?.fear ?? 0;
+    if (fear < 60) return;
+    const intensity = Math.min(0.6, 0.2 + (fear - 60) / 100);
+    const period = Math.max(550, 1400 - (fear - 60) * 18);
+    let alive = true;
+    function beat() {
+      if (!alive) return;
+      audio.thump(intensity);
+      window.setTimeout(beat, period);
+    }
+    const t = window.setTimeout(beat, period);
+    return () => {
+      alive = false;
+      window.clearTimeout(t);
+    };
+  }, [view?.players, view?.selfId]);
+
   const playerNames = useMemo(() => {
     const m = new Map<string, string>();
     view?.players.forEach((p) => m.set(p.id, p.name));
@@ -77,6 +111,11 @@ export function GameScreen({ room, role, reveal }: Props) {
   return (
     <div className={`game-shell fear-${fearTier}`}>
       <div ref={containerRef} className="game-canvas" />
+
+      {/* Always-on haunted-mansion vignette around the local player.
+          Camera follows the player so the screen-centered radial gradient
+          tracks them naturally. */}
+      <div className="mansion-lighting" />
 
       {lightsOutMs > 0 && <div className="lights-out-vignette" />}
 

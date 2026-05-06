@@ -2,6 +2,8 @@ import { useState } from "react";
 import type { Room } from "colyseus.js";
 import { ROOM_CODE_LENGTH } from "@house/shared";
 import { createRoom, joinByCode } from "../net/client.js";
+import { MobileWarning } from "./MobileWarning.js";
+import { audio } from "../audio/cues.js";
 
 interface Props {
   onJoined: (room: Room) => void;
@@ -14,6 +16,7 @@ export function Landing({ onJoined }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   async function handleCreate() {
+    audio.resume();
     setError(null);
     setBusy(true);
     try {
@@ -27,6 +30,7 @@ export function Landing({ onJoined }: Props) {
   }
 
   async function handleJoin() {
+    audio.resume();
     setError(null);
     if (code.length !== ROOM_CODE_LENGTH) {
       setError(`Code must be ${ROOM_CODE_LENGTH} letters.`);
@@ -98,6 +102,7 @@ export function Landing({ onJoined }: Props) {
       </button>
 
       {error && <div className="error">{error}</div>}
+      <MobileWarning />
     </div>
   );
 }
