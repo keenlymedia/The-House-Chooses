@@ -6,6 +6,13 @@ export const ROOM_CODE_LENGTH = 4;
 
 export const REVEAL_DURATION_MS = 6000;
 
+export const MEETING_DISCUSSION_MS = 30_000;
+export const MEETING_VOTE_MS = 25_000;
+export const BELL_INTERACT_RADIUS = 56;
+export const SKIP_VOTE = "skip";
+
+export const PANICKED_FEAR_THRESHOLD = 90;
+
 export const PHASES = [
   "lobby",
   "reveal",

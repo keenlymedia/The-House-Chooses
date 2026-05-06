@@ -1,8 +1,10 @@
 import Phaser from "phaser";
 import type { Room } from "colyseus.js";
 import {
+  BELL_INTERACT_RADIUS,
   C2S,
   DOOR_TILES,
+  FOYER_BELL,
   MAP_HEIGHT,
   MAP_WIDTH,
   PLAYER_RADIUS,
@@ -170,6 +172,22 @@ export class MansionScene extends Phaser.Scene {
         .setStrokeStyle(0, DOOR_LOCK_COLOR, 0);
       this.doorOverlays.push(r);
     }
+
+    // Foyer bell.
+    const bellRing = this.add.circle(
+      FOYER_BELL.x,
+      FOYER_BELL.y,
+      BELL_INTERACT_RADIUS,
+    );
+    bellRing.setStrokeStyle(1, 0xc45eff, 0.4);
+    this.add.circle(FOYER_BELL.x, FOYER_BELL.y, 8, 0xc45eff);
+    this.add
+      .text(FOYER_BELL.x, FOYER_BELL.y - 18, "BELL", {
+        fontFamily: "ui-sans-serif, system-ui",
+        fontSize: "9px",
+        color: "#c45eff",
+      })
+      .setOrigin(0.5);
   }
 
   update(_t: number, dtMs: number): void {
@@ -299,22 +317,42 @@ export class MansionScene extends Phaser.Scene {
     }
 
     const nearby = this.findNearestTask();
-    this.interaction.setPrompt(
-      !this.activeInteraction && nearby
-        ? `Hold E — ${TASK_LABELS[nearby.type]}`
-        : null,
-    );
+    const nearBell = this.isNearBell();
+    if (this.activeInteraction) {
+      this.interaction.setPrompt(null);
+    } else if (nearby) {
+      this.interaction.setPrompt(`Hold E — ${TASK_LABELS[nearby.type]}`);
+    } else if (nearBell) {
+      this.interaction.setPrompt("Press E — Call Meeting");
+    } else {
+      this.interaction.setPrompt(null);
+    }
 
     const eDown = this.keys.E.isDown;
+    const ePressed = Phaser.Input.Keyboard.JustDown(this.keys.E);
+
+    // Bell press is one-shot and only when no task is in range.
+    if (ePressed && !nearby && nearBell && !this.activeInteraction) {
+      this.room.send(C2S.CallMeeting, {});
+    }
+
     if (eDown && !this.activeInteraction && nearby && !nearby.complete) {
       this.startInteraction(nearby);
     } else if (!eDown && this.activeInteraction) {
       this.cancelInteraction();
     } else if (this.activeInteraction) {
-      // If we wandered away, cancel.
       const stillNear = nearby && nearby.id === this.activeInteraction.taskId;
       if (!stillNear) this.cancelInteraction();
     }
+  }
+
+  private isNearBell(): boolean {
+    const me = this.sprites.get(this.room.sessionId);
+    if (!me) return false;
+    return (
+      Math.hypot(me.body.x - FOYER_BELL.x, me.body.y - FOYER_BELL.y) <=
+      BELL_INTERACT_RADIUS
+    );
   }
 
   private findNearestTask(): ServerTask | null {

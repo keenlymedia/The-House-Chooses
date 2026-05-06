@@ -9,6 +9,8 @@ export const C2S = {
   TaskCancel: "taskCancel",
   TaskFinish: "taskFinish",
   Sabotage: "sabotage",
+  CallMeeting: "callMeeting",
+  Vote: "vote",
 } as const;
 
 // Server → client message types
@@ -73,4 +75,9 @@ export interface SabotageFlashPayload {
     | "falseWhisper"
     | "curseObject"
     | "breakFuseBox";
+}
+
+export interface VotePayload {
+  // Either a sessionId or "skip".
+  target: string;
 }

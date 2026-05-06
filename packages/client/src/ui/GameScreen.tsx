@@ -6,6 +6,7 @@ import { useRoomState } from "./useRoomState.js";
 import { RoleReveal } from "./RoleReveal.js";
 import { SabotagePanel } from "./SabotagePanel.js";
 import { Whispers } from "./Whispers.js";
+import { MeetingOverlay } from "./MeetingOverlay.js";
 
 interface Props {
   room: Room;
@@ -55,6 +56,10 @@ export function GameScreen({ room, role }: Props) {
   const showReveal = role != null && view?.phase === "reveal";
   const showEnded = view?.phase === "ended";
   const isCorrupted = role?.role === "corrupted";
+  const inMeeting =
+    view?.phase === "meeting" || view?.phase === "voting";
+  const self = view?.players.find((p) => p.id === view.selfId);
+  const selfAlive = !!self?.alive && !self?.banished;
 
   const lightsOutMs = (view?.lightsOutExpiresAt ?? 0) - now;
   const doorLockMs = (view?.doorLockExpiresAt ?? 0) - now;
@@ -155,8 +160,20 @@ export function GameScreen({ room, role }: Props) {
 
       <Whispers room={room} />
 
-      {isCorrupted && view && (
+      {isCorrupted && view && !inMeeting && (
         <SabotagePanel room={room} cooldowns={view.sabotageCooldowns} />
+      )}
+
+      {inMeeting && view && (
+        <MeetingOverlay
+          room={room}
+          view={view}
+          selfAlive={selfAlive}
+          voters={view.meeting.voters}
+          selfVote={view.meeting.selfVote}
+          players={view.players}
+          meeting={view.meeting}
+        />
       )}
 
       {showReveal && <RoleReveal payload={role} playerNames={playerNames} />}

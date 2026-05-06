@@ -1,14 +1,20 @@
 import { Room, type Client } from "@colyseus/core";
 import {
+  BELL_INTERACT_RADIUS,
   C2S,
   FEAR_FROM_CURSE,
+  FOYER_BELL,
   MAX_PLAYERS,
+  MEETING_DISCUSSION_MS,
+  MEETING_VOTE_MS,
   MIN_PLAYERS,
+  PANICKED_FEAR_THRESHOLD,
   PLAYER_SPEED,
   REVEAL_DURATION_MS,
   ROLE_DISTRIBUTION,
   S2C,
   SABOTAGE_TYPES,
+  SKIP_VOTE,
   TASK_DURATION_TOLERANCE_MS,
   TASK_INTERACT_RADIUS,
   buildTileGrid,
@@ -24,6 +30,7 @@ import {
   type SetNamePayload,
   type TaskIdPayload,
   type TileGrid,
+  type VotePayload,
   type WhisperPayload,
 } from "@house/shared";
 import { MatchState, Player } from "../state/MatchState.js";
@@ -35,6 +42,7 @@ import {
 } from "../systems/roles.js";
 import { buildTaskSchema, spawnTasksForMatch } from "../systems/tasks.js";
 import { applySabotage } from "../systems/sabotage.js";
+import { checkWin, tallyMeeting } from "../systems/meetings.js";
 
 interface JoinOptions {
   name?: string;
@@ -59,7 +67,6 @@ export class MansionRoom extends Room<MatchState> {
   private grid: TileGrid = buildTileGrid();
   private doorTiles: Set<string> = doorTileKeys();
   private intents = new Map<string, { dx: number; dy: number }>();
-  // Server-only: never put roles or interactions into Colyseus state.
   private roles = new Map<string, RoleAssignment>();
   private interactions = new Map<string, Interaction>();
 
@@ -82,6 +89,8 @@ export class MansionRoom extends Room<MatchState> {
     this.onMessage(C2S.TaskCancel, (c) => this.handleTaskCancel(c));
     this.onMessage(C2S.TaskFinish, (c, p: TaskIdPayload) => this.handleTaskFinish(c, p));
     this.onMessage(C2S.Sabotage, (c, p: SabotagePayload) => this.handleSabotage(c, p));
+    this.onMessage(C2S.CallMeeting, (c) => this.handleCallMeeting(c));
+    this.onMessage(C2S.Vote, (c, p: VotePayload) => this.handleVote(c, p));
 
     this.setSimulationInterval((dt) => this.tick(dt / 1000), 1000 / TICK_HZ);
 
@@ -244,7 +253,6 @@ export class MansionRoom extends Room<MatchState> {
 
     task.complete = true;
     if (task.cursed) {
-      // Cursed tasks bite the survivor on completion. Visual fear effect lands in step 9.
       task.cursed = false;
       player.fear = Math.min(100, player.fear + FEAR_FROM_CURSE);
     }
@@ -288,9 +296,108 @@ export class MansionRoom extends Room<MatchState> {
         target.send(S2C.Whisper, w);
       }
     }
-    // Broadcast a non-attributed flash so survivors know *something* happened.
     const flash: SabotageFlashPayload = { type };
     this.broadcast(S2C.SabotageFlash, flash);
+  }
+
+  // --- meetings ------------------------------------------------------------
+
+  private handleCallMeeting(client: Client): void {
+    if (this.state.phase !== "playing") return;
+    const player = this.state.players.get(client.sessionId);
+    if (!player?.alive || player.banished) return;
+    if (player.fear >= PANICKED_FEAR_THRESHOLD) {
+      client.send(S2C.Error, { reason: "panicked" });
+      return;
+    }
+    const d = Math.hypot(player.x - FOYER_BELL.x, player.y - FOYER_BELL.y);
+    if (d > BELL_INTERACT_RADIUS) {
+      client.send(S2C.Error, { reason: "not_at_bell" });
+      return;
+    }
+    this.startMeeting(client.sessionId);
+  }
+
+  private startMeeting(calledBy: string): void {
+    // Wipe interactions and movement intent — meetings freeze the world.
+    this.interactions.clear();
+    for (const id of this.intents.keys()) {
+      this.intents.set(id, { dx: 0, dy: 0 });
+    }
+
+    const m = this.state.meeting;
+    m.calledBy = calledBy;
+    m.discussionEndsAt = Date.now() + MEETING_DISCUSSION_MS;
+    m.voteEndsAt = 0;
+    m.votes.clear();
+    m.lastBanishedId = "";
+
+    this.state.phase = "meeting";
+
+    this.clock.setTimeout(() => {
+      if (this.state.phase === "meeting") this.openVoting();
+    }, MEETING_DISCUSSION_MS);
+  }
+
+  private openVoting(): void {
+    this.state.phase = "voting";
+    this.state.meeting.voteEndsAt = Date.now() + MEETING_VOTE_MS;
+    this.clock.setTimeout(() => {
+      if (this.state.phase === "voting") this.resolveVoting();
+    }, MEETING_VOTE_MS);
+  }
+
+  private handleVote(client: Client, payload: VotePayload): void {
+    if (this.state.phase !== "voting") return;
+    const voter = this.state.players.get(client.sessionId);
+    if (!voter?.alive || voter.banished) return;
+
+    const target = String(payload?.target ?? "");
+    if (target !== SKIP_VOTE) {
+      const targetPlayer = this.state.players.get(target);
+      if (!targetPlayer?.alive || targetPlayer.banished) return;
+    }
+    if (this.state.meeting.votes.has(client.sessionId)) return; // vote lock
+
+    this.state.meeting.votes.set(client.sessionId, target);
+
+    // If every alive player has voted, resolve early.
+    const aliveCount = countAlive(this.state);
+    if (this.state.meeting.votes.size >= aliveCount) {
+      this.resolveVoting();
+    }
+  }
+
+  private resolveVoting(): void {
+    if (this.state.phase !== "voting") return;
+
+    const outcome = tallyMeeting(this.state);
+    if (outcome.banishedId && outcome.banishedId !== SKIP_VOTE) {
+      const banished = this.state.players.get(outcome.banishedId);
+      if (banished) {
+        banished.alive = false;
+        banished.banished = true;
+        this.state.meeting.lastBanishedId = outcome.banishedId;
+        // Witnessing a banish bumps fear for everyone alive.
+        this.state.players.forEach((p) => {
+          if (p.alive) p.fear = Math.min(100, p.fear + 8);
+        });
+      }
+    }
+
+    const win = checkWin(this.state, this.roles);
+    if (win.winner) {
+      this.state.phase = "ended";
+      this.state.winner = win.winner;
+      return;
+    }
+
+    // Resume play after a short pause so clients can show the outcome banner.
+    this.clock.setTimeout(() => {
+      if (this.state.phase !== "ended") this.state.phase = "playing";
+    }, 4000);
+    // Mark voting closed but keep meeting payload visible until phase swaps.
+    this.state.meeting.voteEndsAt = 0;
   }
 
   // --- internals -----------------------------------------------------------
@@ -372,6 +479,14 @@ function countCompleted(state: MatchState): number {
   let n = 0;
   state.tasks.forEach((t) => {
     if (t.complete) n++;
+  });
+  return n;
+}
+
+function countAlive(state: MatchState): number {
+  let n = 0;
+  state.players.forEach((p) => {
+    if (p.alive && !p.banished) n++;
   });
   return n;
 }

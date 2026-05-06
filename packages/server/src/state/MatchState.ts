@@ -11,6 +11,7 @@ export class Player extends Schema {
   @type("number") x = 0;
   @type("number") y = 0;
   @type("number") fear = 0;
+  @type("boolean") banished = false;
 }
 
 export class Task extends Schema {
@@ -25,6 +26,16 @@ export class Task extends Schema {
   @type("boolean") urgent = false;
 }
 
+export class Meeting extends Schema {
+  @type("string") calledBy = "";
+  @type("number") discussionEndsAt = 0;
+  @type("number") voteEndsAt = 0;
+  // Maps voterId → "skip" or a sessionId. Server only writes; client cannot
+  // forge entries because every Vote message is validated by sessionId.
+  @type({ map: "string" }) votes = new MapSchema<string>();
+  @type("string") lastBanishedId = "";
+}
+
 export class MatchState extends Schema {
   @type("string") code = "";
   @type("string") phase: Phase = "lobby";
@@ -33,9 +44,9 @@ export class MatchState extends Schema {
   @type("number") totalTasks = 0;
   @type("number") doorLockExpiresAt = 0; // unix ms
   @type("number") lightsOutExpiresAt = 0; // unix ms
-  // sabotage type → next-available unix ms
   @type({ map: "number" }) sabotageCooldowns = new MapSchema<number>();
   @type({ map: Player }) players = new MapSchema<Player>();
   @type({ map: Task }) tasks = new MapSchema<Task>();
+  @type(Meeting) meeting = new Meeting();
   @type("string") winner = "";
 }
