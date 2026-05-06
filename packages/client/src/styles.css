@@ -1,0 +1,192 @@
+:root {
+  color-scheme: dark;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: #0b0a0d;
+  color: #e8e6ea;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.shell {
+  width: min(560px, 92vw);
+  padding: 32px 28px;
+  background: #15131a;
+  border: 1px solid #2a2530;
+  border-radius: 14px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+}
+
+h1 {
+  margin: 0 0 6px;
+  font-size: 28px;
+  letter-spacing: 0.04em;
+}
+
+.tagline {
+  margin: 0 0 24px;
+  color: #8c869a;
+  font-size: 13px;
+}
+
+label {
+  display: block;
+  font-size: 12px;
+  color: #8c869a;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+input {
+  width: 100%;
+  padding: 10px 12px;
+  background: #0d0c10;
+  border: 1px solid #2a2530;
+  border-radius: 8px;
+  color: #e8e6ea;
+  font-size: 15px;
+  font-family: inherit;
+}
+
+input:focus {
+  outline: none;
+  border-color: #6b3fa0;
+}
+
+.code-input {
+  text-transform: uppercase;
+  letter-spacing: 0.4em;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  text-align: center;
+  font-size: 22px;
+}
+
+button {
+  cursor: pointer;
+  padding: 10px 16px;
+  background: #6b3fa0;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+}
+
+button:hover:not(:disabled) {
+  background: #7c4eb5;
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+button.secondary {
+  background: transparent;
+  border: 1px solid #2a2530;
+  color: #c8c4d0;
+}
+
+button.secondary:hover:not(:disabled) {
+  background: #1d1a23;
+}
+
+.row {
+  display: flex;
+  gap: 10px;
+}
+
+.row > * {
+  flex: 1;
+}
+
+.stack > * + * {
+  margin-top: 14px;
+}
+
+.divider {
+  height: 1px;
+  background: #2a2530;
+  margin: 22px 0;
+}
+
+.error {
+  color: #ff7a7a;
+  font-size: 13px;
+  margin-top: 8px;
+}
+
+.lobby-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 18px;
+}
+
+.code-display {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 28px;
+  letter-spacing: 0.4em;
+  color: #d3b3ff;
+}
+
+.player-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 18px;
+}
+
+.player-list li {
+  padding: 10px 12px;
+  border: 1px solid #2a2530;
+  border-radius: 8px;
+  margin-bottom: 6px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 14px;
+}
+
+.badge {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 3px 7px;
+  border-radius: 4px;
+  background: #2a2530;
+  color: #c8c4d0;
+}
+
+.badge.host {
+  background: #6b3fa0;
+  color: white;
+}
+
+.badge.ready {
+  background: #2f6b3f;
+  color: white;
+}
+
+.game-shell {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #050507;
+}
