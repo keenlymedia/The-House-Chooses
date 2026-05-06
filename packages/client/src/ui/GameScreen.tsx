@@ -62,12 +62,14 @@ export function GameScreen({ room, role }: Props) {
   const inRitual = view?.phase === "ritual";
   const self = view?.players.find((p) => p.id === view.selfId);
   const selfAlive = !!self?.alive && !self?.banished;
+  const selfFear = self?.fear ?? 0;
+  const fearTier = fearTierFor(selfFear);
 
   const lightsOutMs = (view?.lightsOutExpiresAt ?? 0) - now;
   const doorLockMs = (view?.doorLockExpiresAt ?? 0) - now;
 
   return (
-    <div className="game-shell">
+    <div className={`game-shell fear-${fearTier}`}>
       <div ref={containerRef} className="game-canvas" />
 
       {lightsOutMs > 0 && <div className="lights-out-vignette" />}
@@ -116,6 +118,18 @@ export function GameScreen({ room, role }: Props) {
             <div
               className="hud-meter-fill haunt"
               style={{ width: `${view?.hauntLevel ?? 0}%` }}
+            />
+          </div>
+        </div>
+        <div className="hud-meter">
+          <div className="hud-meter-label">
+            <span>Fear {fearTier === "panic" && <em>· panicked</em>}</span>
+            <span>{Math.round(selfFear)}%</span>
+          </div>
+          <div className="hud-meter-bar">
+            <div
+              className="hud-meter-fill fear"
+              style={{ width: `${selfFear}%` }}
             />
           </div>
         </div>
@@ -210,4 +224,11 @@ function roleColor(role: RolePayload["role"]): string {
   if (role === "survivor") return "#7bff5e";
   if (role === "corrupted") return "#ff5e5e";
   return "#c45eff";
+}
+
+function fearTierFor(fear: number): "calm" | "uneasy" | "shaken" | "panic" {
+  if (fear >= 90) return "panic";
+  if (fear >= 70) return "shaken";
+  if (fear >= 40) return "uneasy";
+  return "calm";
 }

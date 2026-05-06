@@ -33,7 +33,9 @@ export const HAUNT_THRESHOLD_FULL = 75;
 
 // Fear bumps wired to events outside fear.ts.
 export const FEAR_FROM_FAILED_RITUAL = 15;
-export const FEAR_FROM_BANISH_WITNESS = 8;
+export const FEAR_FROM_BANISH_WITNESS = 20;
+export const FEAR_FROM_WHISPER = 15;
+export const FEAR_RELIEF_FROM_SEAL_RITUAL = 25;
 
 export const PHASES = [
   "lobby",

@@ -398,6 +398,62 @@ button.secondary:hover:not(:disabled) {
   background: linear-gradient(90deg, #6b1f1f, #ff5e5e);
 }
 
+.hud-meter-fill.fear {
+  background: linear-gradient(90deg, #2a2530, #ff9c9c);
+}
+
+.fear-uneasy .game-canvas {
+  filter: hue-rotate(8deg) saturate(0.95) contrast(1.05);
+  transition: filter 600ms ease;
+}
+
+.fear-shaken .game-canvas {
+  filter: hue-rotate(-12deg) saturate(0.85) contrast(1.1) blur(0.4px);
+  transition: filter 600ms ease;
+}
+
+.fear-panic .game-canvas {
+  filter: hue-rotate(-30deg) saturate(0.65) contrast(1.15) blur(0.9px);
+  transition: filter 600ms ease;
+  animation: panicShake 1.6s ease-in-out infinite;
+}
+
+@keyframes panicShake {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  25% {
+    transform: translate(-1px, 1px);
+  }
+  50% {
+    transform: translate(1px, -1px);
+  }
+  75% {
+    transform: translate(-1px, -1px);
+  }
+}
+
+.fear-shaken::before,
+.fear-panic::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      circle at 18% 28%,
+      rgba(255, 156, 156, 0.05) 0,
+      transparent 30%
+    ),
+    radial-gradient(
+      circle at 78% 72%,
+      rgba(196, 94, 255, 0.06) 0,
+      transparent 28%
+    );
+  z-index: 5;
+}
+
 .lights-out-vignette {
   position: absolute;
   inset: 0;

@@ -5,6 +5,8 @@ import {
   FEAR_FROM_BANISH_WITNESS,
   FEAR_FROM_CURSE,
   FEAR_FROM_FAILED_RITUAL,
+  FEAR_FROM_WHISPER,
+  FEAR_RELIEF_FROM_SEAL_RITUAL,
   FOYER_BELL,
   HAUNT_THRESHOLD_FULL,
   MAX_PLAYERS,
@@ -57,6 +59,7 @@ import { buildTaskSchema, spawnTasksForMatch } from "../systems/tasks.js";
 import { applySabotage } from "../systems/sabotage.js";
 import { checkWin, tallyMeeting } from "../systems/meetings.js";
 import { LeaderQueue, RitualDeck, tallyRitualVote } from "../systems/ritual.js";
+import { FearSystem } from "../systems/fear.js";
 
 interface JoinOptions {
   name?: string;
@@ -89,6 +92,10 @@ export class MansionRoom extends Room<MatchState> {
   private leaderQueue = new LeaderQueue();
   private leaderHand: RitualCard[] = [];
   private witnessHand: RitualCard[] = [];
+
+  // Fear system. Update at 1Hz from the simulation loop.
+  private fear = new FearSystem();
+  private fearAccumMs = 0;
 
   onCreate(_options: unknown): void {
     this.code = generateCode();
@@ -159,6 +166,8 @@ export class MansionRoom extends Room<MatchState> {
     this.intents.delete(client.sessionId);
     this.roles.delete(client.sessionId);
     this.interactions.delete(client.sessionId);
+    this.leaderQueue.remove(client.sessionId);
+    this.fear.forget(client.sessionId);
 
     if (wasHost) {
       const next = this.state.players.values().next().value;
@@ -330,6 +339,13 @@ export class MansionRoom extends Room<MatchState> {
       if (target) {
         const w: WhisperPayload = { text: result.whisper.text };
         target.send(S2C.Whisper, w);
+        const targetPlayer = this.state.players.get(result.whisper.sessionId);
+        if (targetPlayer) {
+          targetPlayer.fear = Math.min(
+            100,
+            targetPlayer.fear + FEAR_FROM_WHISPER,
+          );
+        }
       }
     }
     const flash: SabotageFlashPayload = { type };
@@ -643,8 +659,15 @@ export class MansionRoom extends Room<MatchState> {
     r.subPhase = "resolve";
     r.publicOutcome = card;
 
-    if (card === "seal") r.sealCount += 1;
-    else r.awakenCount += 1;
+    if (card === "seal") {
+      r.sealCount += 1;
+      // Group relief: completing a Seal cools everyone alive.
+      this.state.players.forEach((p) => {
+        if (p.alive && !p.banished) {
+          p.fear = Math.max(0, p.fear - FEAR_RELIEF_FROM_SEAL_RITUAL);
+        }
+      });
+    } else r.awakenCount += 1;
 
     if (r.sealCount >= RITUAL_SEAL_TARGET) {
       this.state.phase = "ended";
@@ -689,6 +712,14 @@ export class MansionRoom extends Room<MatchState> {
     if (this.state.phase !== "playing" && this.state.phase !== "reveal") return;
 
     const now = Date.now();
+
+    // Update fear at 1Hz so per-second deltas land cleanly.
+    this.fearAccumMs += dt * 1000;
+    if (this.fearAccumMs >= 1000 && this.state.phase === "playing") {
+      this.fearAccumMs = 0;
+      this.fear.update(this.state, now, 1);
+    }
+
     const lockedDoors =
       this.state.doorLockExpiresAt > now ? this.doorTiles : undefined;
 

@@ -72,6 +72,8 @@ export class MansionScene extends Phaser.Scene {
   private sprites = new Map<string, PlayerSprite>();
   private taskMarkers = new Map<string, TaskMarker>();
   private doorOverlays: Phaser.GameObjects.Rectangle[] = [];
+  private fearGhosts: Phaser.GameObjects.Arc[] = [];
+  private fearGhostSwapAt = 0;
   private keys!: Record<"W" | "A" | "S" | "D" | "E", Phaser.Input.Keyboard.Key>;
   private lastSentDx = 0;
   private lastSentDy = 0;
@@ -197,7 +199,50 @@ export class MansionScene extends Phaser.Scene {
     this.handleInput();
     this.lerpSprites(dtMs);
     this.tickInteraction();
+    this.tickFearGhosts(performance.now());
     this.ping(dtMs);
+  }
+
+  private tickFearGhosts(now: number): void {
+    const players = this.room.state.players as unknown as
+      | { get?: (id: string) => { fear: number } | undefined }
+      | undefined;
+    const me = players?.get?.(this.room.sessionId);
+    const fear = me?.fear ?? 0;
+
+    if (fear < 70) {
+      if (this.fearGhosts.length > 0) {
+        for (const g of this.fearGhosts) g.destroy();
+        this.fearGhosts = [];
+      }
+      return;
+    }
+    if (now < this.fearGhostSwapAt) return;
+
+    for (const g of this.fearGhosts) g.destroy();
+    this.fearGhosts = [];
+
+    const count = fear >= 90 ? 4 : 2;
+    for (let i = 0; i < count; i++) {
+      const room = ROOMS[Math.floor(Math.random() * ROOMS.length)];
+      const tx = room.x + 1 + Math.floor(Math.random() * Math.max(1, room.w - 2));
+      const ty = room.y + 1 + Math.floor(Math.random() * Math.max(1, room.h - 2));
+      const x = tx * TILE + TILE / 2;
+      const y = ty * TILE + TILE / 2;
+      const ghost = this.add.circle(x, y, 6, TASK_COLOR, 0.35);
+      ghost.setStrokeStyle(1, TASK_COLOR, 0.25);
+      ghost.setDepth(-2);
+      this.tweens.add({
+        targets: ghost,
+        alpha: 0.05,
+        duration: 1200,
+        yoyo: true,
+        repeat: -1,
+        ease: "Sine.easeInOut",
+      });
+      this.fearGhosts.push(ghost);
+    }
+    this.fearGhostSwapAt = now + 3500;
   }
 
   private reconcileDoors(): void {
