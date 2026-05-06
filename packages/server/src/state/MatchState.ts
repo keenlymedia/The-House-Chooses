@@ -4,6 +4,7 @@ import type { Phase } from "@house/shared";
 export class Player extends Schema {
   @type("string") id = "";
   @type("string") name = "";
+  @type("string") color = "#9b6bff";
   @type("boolean") isHost = false;
   @type("boolean") ready = false;
   @type("boolean") alive = true;

@@ -183,10 +183,59 @@ button.secondary:hover:not(:disabled) {
 }
 
 .game-shell {
-  width: 100vw;
-  height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  position: fixed;
+  inset: 0;
   background: #050507;
+}
+
+.game-canvas {
+  position: absolute;
+  inset: 0;
+}
+
+.hud-debug {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  padding: 10px 12px;
+  background: rgba(15, 13, 20, 0.85);
+  border: 1px solid #2a2530;
+  border-radius: 8px;
+  font-size: 12px;
+  min-width: 180px;
+  pointer-events: none;
+  backdrop-filter: blur(4px);
+}
+
+.hud-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.hud-label {
+  color: #8c869a;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 10px;
+}
+
+.hud-value {
+  color: #e8e6ea;
+}
+
+.mono {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+}
+
+.hud-hint {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #2a2530;
+  color: #6b6478;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
 }
