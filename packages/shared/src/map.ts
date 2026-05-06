@@ -31,7 +31,7 @@ export const ROOMS: RoomDef[] = [
 ];
 
 // Each entry is a tile that should be carved out of the wall band between rooms.
-const DOOR_TILES: ReadonlyArray<readonly [number, number]> = [
+export const DOOR_TILES: ReadonlyArray<readonly [number, number]> = [
   // top row to middle row (vertical openings, 2 tiles tall)
   [6, 8], [6, 9],
   [19, 8], [19, 9],
@@ -93,13 +93,14 @@ export function spawnPositions(): Array<{ x: number; y: number }> {
 }
 
 // Collision check: can the circle of radius r at (x, y) px stand on floor?
+// When `lockedDoors` is provided, door tiles are treated as walls.
 export function canStand(
   grid: TileGrid,
   x: number,
   y: number,
   r: number = PLAYER_RADIUS,
+  lockedDoors?: ReadonlySet<string>,
 ): boolean {
-  // Check 4 corners of the bounding box. Cheap and adequate for axis-aligned tiles.
   const offsets: Array<[number, number]> = [
     [-r, -r], [r, -r], [-r, r], [r, r],
   ];
@@ -108,8 +109,17 @@ export function canStand(
     const ty = Math.floor((y + dy) / TILE);
     if (tx < 0 || ty < 0 || tx >= MAP_WIDTH || ty >= MAP_HEIGHT) return false;
     if (grid[ty][tx] === 1) return false;
+    if (lockedDoors && lockedDoors.has(tileKey(tx, ty))) return false;
   }
   return true;
+}
+
+export function tileKey(tx: number, ty: number): string {
+  return `${tx},${ty}`;
+}
+
+export function doorTileKeys(): Set<string> {
+  return new Set(DOOR_TILES.map(([x, y]) => tileKey(x, y)));
 }
 
 export function roomAt(x: number, y: number): RoomDef | null {

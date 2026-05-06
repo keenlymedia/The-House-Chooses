@@ -2,6 +2,7 @@ import Phaser from "phaser";
 import type { Room } from "colyseus.js";
 import {
   C2S,
+  DOOR_TILES,
   MAP_HEIGHT,
   MAP_WIDTH,
   PLAYER_RADIUS,
@@ -54,15 +55,21 @@ interface ServerTask {
   y: number;
   durationMs: number;
   complete: boolean;
+  cursed: boolean;
+  urgent: boolean;
 }
 
 const TASK_COLOR = 0xffd25e;
 const TASK_DONE_COLOR = 0x4a4356;
+const TASK_URGENT_COLOR = 0xff5e5e;
+const TASK_CURSED_COLOR = 0xc45eff;
+const DOOR_LOCK_COLOR = 0xff5e5e;
 
 export class MansionScene extends Phaser.Scene {
   private grid = buildTileGrid();
   private sprites = new Map<string, PlayerSprite>();
   private taskMarkers = new Map<string, TaskMarker>();
+  private doorOverlays: Phaser.GameObjects.Rectangle[] = [];
   private keys!: Record<"W" | "A" | "S" | "D" | "E", Phaser.Input.Keyboard.Key>;
   private lastSentDx = 0;
   private lastSentDy = 0;
@@ -154,15 +161,34 @@ export class MansionScene extends Phaser.Scene {
         .setOrigin(0.5)
         .setAlpha(0.7);
     }
+
+    // Door overlays — invisible until lock activates.
+    for (const [tx, ty] of DOOR_TILES) {
+      const r = this.add
+        .rectangle(tx * TILE, ty * TILE, TILE, TILE, DOOR_LOCK_COLOR, 0)
+        .setOrigin(0, 0)
+        .setStrokeStyle(0, DOOR_LOCK_COLOR, 0);
+      this.doorOverlays.push(r);
+    }
   }
 
   update(_t: number, dtMs: number): void {
     this.reconcileSprites();
     this.reconcileTasks();
+    this.reconcileDoors();
     this.handleInput();
     this.lerpSprites(dtMs);
     this.tickInteraction();
     this.ping(dtMs);
+  }
+
+  private reconcileDoors(): void {
+    const expiresAt =
+      (this.room.state as { doorLockExpiresAt?: number }).doorLockExpiresAt ?? 0;
+    const locked = expiresAt > Date.now();
+    for (const r of this.doorOverlays) {
+      r.setFillStyle(DOOR_LOCK_COLOR, locked ? 0.35 : 0);
+    }
   }
 
   private reconcileSprites(): void {
@@ -209,7 +235,10 @@ export class MansionScene extends Phaser.Scene {
         marker = this.createTaskMarker(t);
         this.taskMarkers.set(id, marker);
       }
-      const color = t.complete ? TASK_DONE_COLOR : TASK_COLOR;
+      let color = TASK_COLOR;
+      if (t.complete) color = TASK_DONE_COLOR;
+      else if (t.urgent) color = TASK_URGENT_COLOR;
+      else if (t.cursed) color = TASK_CURSED_COLOR;
       marker.dot.setFillStyle(color);
       marker.ring.setStrokeStyle(1, color, t.complete ? 0.25 : 0.5);
       marker.task = t;

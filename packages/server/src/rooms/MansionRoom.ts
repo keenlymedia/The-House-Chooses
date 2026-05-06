@@ -1,28 +1,40 @@
 import { Room, type Client } from "@colyseus/core";
 import {
   C2S,
+  FEAR_FROM_CURSE,
   MAX_PLAYERS,
   MIN_PLAYERS,
   PLAYER_SPEED,
   REVEAL_DURATION_MS,
   ROLE_DISTRIBUTION,
   S2C,
+  SABOTAGE_TYPES,
   TASK_DURATION_TOLERANCE_MS,
   TASK_INTERACT_RADIUS,
   buildTileGrid,
   canStand,
+  doorTileKeys,
   spawnPositions,
   type MovePayload,
   type PingPayload,
   type RolePayload,
+  type SabotageFlashPayload,
+  type SabotagePayload,
+  type SabotageType,
   type SetNamePayload,
   type TaskIdPayload,
   type TileGrid,
+  type WhisperPayload,
 } from "@house/shared";
 import { MatchState, Player } from "../state/MatchState.js";
 import { generateCode, registerCode, releaseCode } from "./roomCodes.js";
-import { assignRoles, type RoleAssignment } from "../systems/roles.js";
+import {
+  assignRoles,
+  canSabotage,
+  type RoleAssignment,
+} from "../systems/roles.js";
 import { buildTaskSchema, spawnTasksForMatch } from "../systems/tasks.js";
+import { applySabotage } from "../systems/sabotage.js";
 
 interface JoinOptions {
   name?: string;
@@ -45,6 +57,7 @@ export class MansionRoom extends Room<MatchState> {
   maxClients = MAX_PLAYERS;
   private code = "";
   private grid: TileGrid = buildTileGrid();
+  private doorTiles: Set<string> = doorTileKeys();
   private intents = new Map<string, { dx: number; dy: number }>();
   // Server-only: never put roles or interactions into Colyseus state.
   private roles = new Map<string, RoleAssignment>();
@@ -68,6 +81,7 @@ export class MansionRoom extends Room<MatchState> {
     this.onMessage(C2S.TaskStart, (c, p: TaskIdPayload) => this.handleTaskStart(c, p));
     this.onMessage(C2S.TaskCancel, (c) => this.handleTaskCancel(c));
     this.onMessage(C2S.TaskFinish, (c, p: TaskIdPayload) => this.handleTaskFinish(c, p));
+    this.onMessage(C2S.Sabotage, (c, p: SabotagePayload) => this.handleSabotage(c, p));
 
     this.setSimulationInterval((dt) => this.tick(dt / 1000), 1000 / TICK_HZ);
 
@@ -223,18 +237,18 @@ export class MansionRoom extends Room<MatchState> {
     if (!withinReach(player, task)) return;
 
     const elapsed = Date.now() - interaction.startedAt;
-    if (elapsed < task.durationMs - TASK_DURATION_TOLERANCE_MS) {
-      // Too fast to be a real hold — likely cheat or desync. Silently drop.
-      return;
-    }
+    if (elapsed < task.durationMs - TASK_DURATION_TOLERANCE_MS) return;
 
     const role = this.roles.get(client.sessionId)?.role;
-    if (role !== "survivor") {
-      // Corrupted/Vessel "completed" the animation. No real progress.
-      return;
-    }
+    if (role !== "survivor") return;
 
     task.complete = true;
+    if (task.cursed) {
+      // Cursed tasks bite the survivor on completion. Visual fear effect lands in step 9.
+      task.cursed = false;
+      player.fear = Math.min(100, player.fear + FEAR_FROM_CURSE);
+    }
+
     const completed = countCompleted(this.state);
     this.state.sealProgress = Math.round(
       (completed / Math.max(1, this.state.totalTasks)) * 100,
@@ -244,6 +258,39 @@ export class MansionRoom extends Room<MatchState> {
       this.state.phase = "ended";
       this.state.winner = "survivors";
     }
+  }
+
+  private handleSabotage(client: Client, payload: SabotagePayload): void {
+    const type = payload?.type;
+    if (!isSabotageType(type)) return;
+    const role = this.roles.get(client.sessionId)?.role;
+    const isCorr = canSabotage(role);
+    const result = applySabotage(
+      type,
+      {
+        state: this.state,
+        grid: this.grid,
+        actorId: client.sessionId,
+        now: Date.now(),
+      },
+      isCorr,
+    );
+    if (!result.ok) {
+      client.send(S2C.Error, { reason: `sabotage_${result.reason}` });
+      return;
+    }
+    if (result.whisper) {
+      const target = this.clients.find(
+        (c) => c.sessionId === result.whisper!.sessionId,
+      );
+      if (target) {
+        const w: WhisperPayload = { text: result.whisper.text };
+        target.send(S2C.Whisper, w);
+      }
+    }
+    // Broadcast a non-attributed flash so survivors know *something* happened.
+    const flash: SabotageFlashPayload = { type };
+    this.broadcast(S2C.SabotageFlash, flash);
   }
 
   // --- internals -----------------------------------------------------------
@@ -258,6 +305,11 @@ export class MansionRoom extends Room<MatchState> {
 
   private tick(dt: number): void {
     if (this.state.phase !== "playing" && this.state.phase !== "reveal") return;
+
+    const now = Date.now();
+    const lockedDoors =
+      this.state.doorLockExpiresAt > now ? this.doorTiles : undefined;
+
     for (const [id, player] of this.state.players) {
       const intent = this.intents.get(id);
       if (!intent || (intent.dx === 0 && intent.dy === 0)) continue;
@@ -269,11 +321,14 @@ export class MansionRoom extends Room<MatchState> {
       const stepY = (intent.dy / len) * step;
 
       const tryX = player.x + stepX;
-      if (canStand(this.grid, tryX, player.y)) player.x = tryX;
+      if (canStand(this.grid, tryX, player.y, undefined, lockedDoors)) {
+        player.x = tryX;
+      }
       const tryY = player.y + stepY;
-      if (canStand(this.grid, player.x, tryY)) player.y = tryY;
+      if (canStand(this.grid, player.x, tryY, undefined, lockedDoors)) {
+        player.y = tryY;
+      }
 
-      // Moving cancels any in-progress task interaction.
       const inter = this.interactions.get(id);
       if (inter) {
         const task = this.state.tasks.get(inter.taskId);
@@ -297,6 +352,13 @@ export class MansionRoom extends Room<MatchState> {
     }
     return positions[0];
   }
+}
+
+function isSabotageType(t: unknown): t is SabotageType {
+  return (
+    typeof t === "string" &&
+    (SABOTAGE_TYPES as readonly string[]).includes(t)
+  );
 }
 
 function withinReach(

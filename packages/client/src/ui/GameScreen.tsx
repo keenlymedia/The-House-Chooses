@@ -4,6 +4,8 @@ import { TASK_LABELS, type RolePayload, type TaskType } from "@house/shared";
 import { mountGame, type GameHandle } from "../game/mountGame.js";
 import { useRoomState } from "./useRoomState.js";
 import { RoleReveal } from "./RoleReveal.js";
+import { SabotagePanel } from "./SabotagePanel.js";
+import { Whispers } from "./Whispers.js";
 
 interface Props {
   room: Room;
@@ -21,6 +23,7 @@ export function GameScreen({ room, role }: Props) {
   const [ping, setPing] = useState<number | null>(null);
   const [interaction, setInteraction] = useState<ActiveInteraction | null>(null);
   const [prompt, setPrompt] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now());
   const view = useRoomState(room);
 
   useEffect(() => {
@@ -37,6 +40,12 @@ export function GameScreen({ room, role }: Props) {
     };
   }, [room]);
 
+  // 4Hz wall clock for sabotage cooldowns / effect timers.
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 250);
+    return () => window.clearInterval(id);
+  }, []);
+
   const playerNames = useMemo(() => {
     const m = new Map<string, string>();
     view?.players.forEach((p) => m.set(p.id, p.name));
@@ -45,10 +54,16 @@ export function GameScreen({ room, role }: Props) {
 
   const showReveal = role != null && view?.phase === "reveal";
   const showEnded = view?.phase === "ended";
+  const isCorrupted = role?.role === "corrupted";
+
+  const lightsOutMs = (view?.lightsOutExpiresAt ?? 0) - now;
+  const doorLockMs = (view?.doorLockExpiresAt ?? 0) - now;
 
   return (
     <div className="game-shell">
       <div ref={containerRef} className="game-canvas" />
+
+      {lightsOutMs > 0 && <div className="lights-out-vignette" />}
 
       <div className="hud-debug">
         <div className="hud-row">
@@ -72,20 +87,51 @@ export function GameScreen({ room, role }: Props) {
         <div className="hud-hint">WASD — move • E — interact</div>
       </div>
 
-      <div className="hud-seal">
-        <div className="hud-seal-label">Seal Progress</div>
-        <div className="hud-seal-bar">
-          <div
-            className="hud-seal-fill"
-            style={{ width: `${view?.sealProgress ?? 0}%` }}
-          />
+      <div className="hud-meters">
+        <div className="hud-meter">
+          <div className="hud-meter-label">
+            <span>Seal Progress</span>
+            <span>{view?.sealProgress ?? 0}%</span>
+          </div>
+          <div className="hud-meter-bar">
+            <div
+              className="hud-meter-fill seal"
+              style={{ width: `${view?.sealProgress ?? 0}%` }}
+            />
+          </div>
         </div>
-        <div className="hud-seal-value">{view?.sealProgress ?? 0}%</div>
+        <div className="hud-meter">
+          <div className="hud-meter-label">
+            <span>Haunt</span>
+            <span>{view?.hauntLevel ?? 0}%</span>
+          </div>
+          <div className="hud-meter-bar">
+            <div
+              className="hud-meter-fill haunt"
+              style={{ width: `${view?.hauntLevel ?? 0}%` }}
+            />
+          </div>
+        </div>
       </div>
 
       {role && (
         <div className="role-badge" style={{ color: roleColor(role.role) }}>
           {role.role}
+        </div>
+      )}
+
+      {(lightsOutMs > 0 || doorLockMs > 0) && (
+        <div className="effects-strip">
+          {lightsOutMs > 0 && (
+            <div className="effect-chip lights">
+              Lights out · {Math.ceil(lightsOutMs / 1000)}s
+            </div>
+          )}
+          {doorLockMs > 0 && (
+            <div className="effect-chip doors">
+              Doors locked · {Math.ceil(doorLockMs / 1000)}s
+            </div>
+          )}
         </div>
       )}
 
@@ -105,6 +151,12 @@ export function GameScreen({ room, role }: Props) {
             />
           </div>
         </div>
+      )}
+
+      <Whispers room={room} />
+
+      {isCorrupted && view && (
+        <SabotagePanel room={room} cooldowns={view.sabotageCooldowns} />
       )}
 
       {showReveal && <RoleReveal payload={role} playerNames={playerNames} />}

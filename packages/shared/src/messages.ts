@@ -8,6 +8,7 @@ export const C2S = {
   TaskStart: "taskStart",
   TaskCancel: "taskCancel",
   TaskFinish: "taskFinish",
+  Sabotage: "sabotage",
 } as const;
 
 // Server → client message types
@@ -16,6 +17,8 @@ export const S2C = {
   Error: "error",
   Kicked: "kicked",
   Pong: "pong",
+  Whisper: "whisper",
+  SabotageFlash: "sabotageFlash",
 } as const;
 
 export interface RolePayload {
@@ -47,4 +50,27 @@ export interface PongPayload {
 
 export interface TaskIdPayload {
   taskId: string;
+}
+
+export interface SabotagePayload {
+  type:
+    | "lightsOut"
+    | "doorLock"
+    | "falseWhisper"
+    | "curseObject"
+    | "breakFuseBox";
+}
+
+export interface WhisperPayload {
+  text: string;
+}
+
+// Public broadcast: "something just happened" without revealing the actor.
+export interface SabotageFlashPayload {
+  type:
+    | "lightsOut"
+    | "doorLock"
+    | "falseWhisper"
+    | "curseObject"
+    | "breakFuseBox";
 }
