@@ -1,22 +1,67 @@
 import { Room, type Client } from "@colyseus/core";
 import {
   C2S,
-  S2C,
+  FEAR_FROM_CURSE,
   MAX_PLAYERS,
   MIN_PLAYERS,
+  PLAYER_SPEED,
+  REVEAL_DURATION_MS,
+  ROLE_DISTRIBUTION,
+  S2C,
+  SABOTAGE_TYPES,
+  TASK_DURATION_TOLERANCE_MS,
+  TASK_INTERACT_RADIUS,
+  buildTileGrid,
+  canStand,
+  doorTileKeys,
+  spawnPositions,
+  type MovePayload,
+  type PingPayload,
+  type RolePayload,
+  type SabotageFlashPayload,
+  type SabotagePayload,
+  type SabotageType,
   type SetNamePayload,
+  type TaskIdPayload,
+  type TileGrid,
+  type WhisperPayload,
 } from "@house/shared";
 import { MatchState, Player } from "../state/MatchState.js";
 import { generateCode, registerCode, releaseCode } from "./roomCodes.js";
+import {
+  assignRoles,
+  canSabotage,
+  type RoleAssignment,
+} from "../systems/roles.js";
+import { buildTaskSchema, spawnTasksForMatch } from "../systems/tasks.js";
+import { applySabotage } from "../systems/sabotage.js";
 
 interface JoinOptions {
   name?: string;
-  code?: string;
+}
+
+const PLAYER_COLORS = [
+  "#ff5e5e", "#5ec8ff", "#ffd25e", "#7bff5e", "#c45eff",
+  "#ff5ec8", "#5effc8", "#ff8a3a", "#5e6dff", "#a8ff5e",
+  "#ff5e9a", "#5effff",
+];
+
+const TICK_HZ = 20;
+
+interface Interaction {
+  taskId: string;
+  startedAt: number;
 }
 
 export class MansionRoom extends Room<MatchState> {
   maxClients = MAX_PLAYERS;
   private code = "";
+  private grid: TileGrid = buildTileGrid();
+  private doorTiles: Set<string> = doorTileKeys();
+  private intents = new Map<string, { dx: number; dy: number }>();
+  // Server-only: never put roles or interactions into Colyseus state.
+  private roles = new Map<string, RoleAssignment>();
+  private interactions = new Map<string, Interaction>();
 
   onCreate(_options: unknown): void {
     this.code = generateCode();
@@ -26,42 +71,19 @@ export class MansionRoom extends Room<MatchState> {
     state.code = this.code;
     this.setState(state);
 
-    this.onMessage(C2S.SetName, (client, payload: SetNamePayload) => {
-      const player = this.state.players.get(client.sessionId);
-      if (!player) return;
-      const trimmed = (payload?.name ?? "").trim().slice(0, 16);
-      if (trimmed.length === 0) return;
-      player.name = trimmed;
+    this.onMessage(C2S.SetName, (c, p: SetNamePayload) => this.handleSetName(c, p));
+    this.onMessage(C2S.ToggleReady, (c) => this.handleToggleReady(c));
+    this.onMessage(C2S.StartMatch, (c) => this.handleStartMatch(c));
+    this.onMessage(C2S.Move, (c, p: MovePayload) => this.handleMove(c, p));
+    this.onMessage(C2S.Ping, (c, p: PingPayload) => {
+      c.send(S2C.Pong, { t: p?.t ?? 0 });
     });
+    this.onMessage(C2S.TaskStart, (c, p: TaskIdPayload) => this.handleTaskStart(c, p));
+    this.onMessage(C2S.TaskCancel, (c) => this.handleTaskCancel(c));
+    this.onMessage(C2S.TaskFinish, (c, p: TaskIdPayload) => this.handleTaskFinish(c, p));
+    this.onMessage(C2S.Sabotage, (c, p: SabotagePayload) => this.handleSabotage(c, p));
 
-    this.onMessage(C2S.ToggleReady, (client) => {
-      const player = this.state.players.get(client.sessionId);
-      if (!player) return;
-      if (this.state.phase !== "lobby") return;
-      player.ready = !player.ready;
-    });
-
-    this.onMessage(C2S.StartMatch, (client) => {
-      const player = this.state.players.get(client.sessionId);
-      if (!player?.isHost) {
-        client.send(S2C.Error, { reason: "not_host" });
-        return;
-      }
-      if (this.state.phase !== "lobby") return;
-      if (this.state.players.size < MIN_PLAYERS) {
-        client.send(S2C.Error, { reason: "need_more_players" });
-        return;
-      }
-      const allReady = Array.from(this.state.players.values()).every(
-        (p) => p.ready || p.isHost,
-      );
-      if (!allReady) {
-        client.send(S2C.Error, { reason: "not_all_ready" });
-        return;
-      }
-      this.state.phase = "playing";
-      // Role assignment + match systems land in step 4.
-    });
+    this.setSimulationInterval((dt) => this.tick(dt / 1000), 1000 / TICK_HZ);
 
     console.log(`[room ${this.roomId}] created with code ${this.code}`);
   }
@@ -71,7 +93,17 @@ export class MansionRoom extends Room<MatchState> {
     player.id = client.sessionId;
     player.name = (options.name ?? "Guest").trim().slice(0, 16) || "Guest";
     player.isHost = this.state.players.size === 0;
+    player.color = PLAYER_COLORS[this.state.players.size % PLAYER_COLORS.length];
+
+    const spawn = this.pickSpawn();
+    player.x = spawn.x;
+    player.y = spawn.y;
+
     this.state.players.set(client.sessionId, player);
+    this.intents.set(client.sessionId, { dx: 0, dy: 0 });
+
+    const existing = this.roles.get(client.sessionId);
+    if (existing) this.sendRole(client, existing);
 
     console.log(
       `[room ${this.roomId}] +${player.name} (${client.sessionId}) host=${player.isHost}`,
@@ -83,6 +115,9 @@ export class MansionRoom extends Room<MatchState> {
     if (!leaving) return;
     const wasHost = leaving.isHost;
     this.state.players.delete(client.sessionId);
+    this.intents.delete(client.sessionId);
+    this.roles.delete(client.sessionId);
+    this.interactions.delete(client.sessionId);
 
     if (wasHost) {
       const next = this.state.players.values().next().value;
@@ -96,4 +131,252 @@ export class MansionRoom extends Room<MatchState> {
     releaseCode(this.code);
     console.log(`[room ${this.roomId}] disposed (code ${this.code} freed)`);
   }
+
+  // --- handlers ------------------------------------------------------------
+
+  private handleSetName(client: Client, payload: SetNamePayload): void {
+    const player = this.state.players.get(client.sessionId);
+    if (!player) return;
+    const trimmed = (payload?.name ?? "").trim().slice(0, 16);
+    if (!trimmed) return;
+    player.name = trimmed;
+  }
+
+  private handleToggleReady(client: Client): void {
+    const player = this.state.players.get(client.sessionId);
+    if (!player) return;
+    if (this.state.phase !== "lobby") return;
+    player.ready = !player.ready;
+  }
+
+  private handleMove(client: Client, payload: MovePayload): void {
+    const player = this.state.players.get(client.sessionId);
+    if (!player || !player.alive) return;
+    if (this.state.phase !== "playing" && this.state.phase !== "reveal") return;
+    const dx = clamp(Number(payload?.dx ?? 0), -1, 1);
+    const dy = clamp(Number(payload?.dy ?? 0), -1, 1);
+    this.intents.set(client.sessionId, { dx, dy });
+  }
+
+  private handleStartMatch(client: Client): void {
+    const requester = this.state.players.get(client.sessionId);
+    if (!requester?.isHost) {
+      client.send(S2C.Error, { reason: "not_host" });
+      return;
+    }
+    if (this.state.phase !== "lobby") return;
+    if (this.state.players.size < MIN_PLAYERS) {
+      client.send(S2C.Error, { reason: "need_more_players" });
+      return;
+    }
+    if (!ROLE_DISTRIBUTION[this.state.players.size]) {
+      client.send(S2C.Error, { reason: "unsupported_player_count" });
+      return;
+    }
+    const allReady = Array.from(this.state.players.values()).every(
+      (p) => p.ready || p.isHost,
+    );
+    if (!allReady) {
+      client.send(S2C.Error, { reason: "not_all_ready" });
+      return;
+    }
+
+    const ids = Array.from(this.state.players.keys());
+    this.roles = assignRoles(ids);
+
+    for (const c of this.clients) {
+      const assignment = this.roles.get(c.sessionId);
+      if (assignment) this.sendRole(c, assignment);
+    }
+
+    this.spawnTasks();
+
+    this.state.phase = "reveal";
+    this.clock.setTimeout(() => {
+      if (this.state.phase === "reveal") this.state.phase = "playing";
+    }, REVEAL_DURATION_MS);
+  }
+
+  private spawnTasks(): void {
+    this.state.tasks.clear();
+    const specs = spawnTasksForMatch(this.grid);
+    for (const spec of specs) {
+      this.state.tasks.set(spec.id, buildTaskSchema(spec));
+    }
+    this.state.totalTasks = specs.length;
+    this.state.sealProgress = 0;
+  }
+
+  private handleTaskStart(client: Client, payload: TaskIdPayload): void {
+    if (this.state.phase !== "playing") return;
+    const player = this.state.players.get(client.sessionId);
+    if (!player?.alive) return;
+    const task = this.state.tasks.get(payload?.taskId ?? "");
+    if (!task || task.complete) return;
+    if (!withinReach(player, task)) return;
+    this.interactions.set(client.sessionId, {
+      taskId: task.id,
+      startedAt: Date.now(),
+    });
+  }
+
+  private handleTaskCancel(client: Client): void {
+    this.interactions.delete(client.sessionId);
+  }
+
+  private handleTaskFinish(client: Client, payload: TaskIdPayload): void {
+    if (this.state.phase !== "playing") return;
+    const interaction = this.interactions.get(client.sessionId);
+    if (!interaction) return;
+    if (interaction.taskId !== payload?.taskId) return;
+
+    const player = this.state.players.get(client.sessionId);
+    const task = this.state.tasks.get(interaction.taskId);
+    this.interactions.delete(client.sessionId);
+    if (!player?.alive || !task || task.complete) return;
+    if (!withinReach(player, task)) return;
+
+    const elapsed = Date.now() - interaction.startedAt;
+    if (elapsed < task.durationMs - TASK_DURATION_TOLERANCE_MS) return;
+
+    const role = this.roles.get(client.sessionId)?.role;
+    if (role !== "survivor") return;
+
+    task.complete = true;
+    if (task.cursed) {
+      // Cursed tasks bite the survivor on completion. Visual fear effect lands in step 9.
+      task.cursed = false;
+      player.fear = Math.min(100, player.fear + FEAR_FROM_CURSE);
+    }
+
+    const completed = countCompleted(this.state);
+    this.state.sealProgress = Math.round(
+      (completed / Math.max(1, this.state.totalTasks)) * 100,
+    );
+
+    if (this.state.sealProgress >= 100) {
+      this.state.phase = "ended";
+      this.state.winner = "survivors";
+    }
+  }
+
+  private handleSabotage(client: Client, payload: SabotagePayload): void {
+    const type = payload?.type;
+    if (!isSabotageType(type)) return;
+    const role = this.roles.get(client.sessionId)?.role;
+    const isCorr = canSabotage(role);
+    const result = applySabotage(
+      type,
+      {
+        state: this.state,
+        grid: this.grid,
+        actorId: client.sessionId,
+        now: Date.now(),
+      },
+      isCorr,
+    );
+    if (!result.ok) {
+      client.send(S2C.Error, { reason: `sabotage_${result.reason}` });
+      return;
+    }
+    if (result.whisper) {
+      const target = this.clients.find(
+        (c) => c.sessionId === result.whisper!.sessionId,
+      );
+      if (target) {
+        const w: WhisperPayload = { text: result.whisper.text };
+        target.send(S2C.Whisper, w);
+      }
+    }
+    // Broadcast a non-attributed flash so survivors know *something* happened.
+    const flash: SabotageFlashPayload = { type };
+    this.broadcast(S2C.SabotageFlash, flash);
+  }
+
+  // --- internals -----------------------------------------------------------
+
+  private sendRole(client: Client, assignment: RoleAssignment): void {
+    const payload: RolePayload = {
+      role: assignment.role,
+      teammates: assignment.teammates,
+    };
+    client.send(S2C.Role, payload);
+  }
+
+  private tick(dt: number): void {
+    if (this.state.phase !== "playing" && this.state.phase !== "reveal") return;
+
+    const now = Date.now();
+    const lockedDoors =
+      this.state.doorLockExpiresAt > now ? this.doorTiles : undefined;
+
+    for (const [id, player] of this.state.players) {
+      const intent = this.intents.get(id);
+      if (!intent || (intent.dx === 0 && intent.dy === 0)) continue;
+      if (!player.alive) continue;
+
+      const len = Math.hypot(intent.dx, intent.dy) || 1;
+      const step = PLAYER_SPEED * dt;
+      const stepX = (intent.dx / len) * step;
+      const stepY = (intent.dy / len) * step;
+
+      const tryX = player.x + stepX;
+      if (canStand(this.grid, tryX, player.y, undefined, lockedDoors)) {
+        player.x = tryX;
+      }
+      const tryY = player.y + stepY;
+      if (canStand(this.grid, player.x, tryY, undefined, lockedDoors)) {
+        player.y = tryY;
+      }
+
+      const inter = this.interactions.get(id);
+      if (inter) {
+        const task = this.state.tasks.get(inter.taskId);
+        if (!task || !withinReach(player, task)) {
+          this.interactions.delete(id);
+        }
+      }
+    }
+  }
+
+  private pickSpawn(): { x: number; y: number } {
+    const positions = spawnPositions();
+    const taken = Array.from(this.state.players.values()).map((p) => ({
+      x: p.x,
+      y: p.y,
+    }));
+    for (const pos of positions) {
+      if (!taken.some((t) => Math.hypot(t.x - pos.x, t.y - pos.y) < 16)) {
+        return pos;
+      }
+    }
+    return positions[0];
+  }
+}
+
+function isSabotageType(t: unknown): t is SabotageType {
+  return (
+    typeof t === "string" &&
+    (SABOTAGE_TYPES as readonly string[]).includes(t)
+  );
+}
+
+function withinReach(
+  player: { x: number; y: number },
+  task: { x: number; y: number },
+): boolean {
+  return Math.hypot(player.x - task.x, player.y - task.y) <= TASK_INTERACT_RADIUS;
+}
+
+function countCompleted(state: MatchState): number {
+  let n = 0;
+  state.tasks.forEach((t) => {
+    if (t.complete) n++;
+  });
+  return n;
+}
+
+function clamp(n: number, lo: number, hi: number): number {
+  if (Number.isNaN(n)) return 0;
+  return Math.max(lo, Math.min(hi, n));
 }

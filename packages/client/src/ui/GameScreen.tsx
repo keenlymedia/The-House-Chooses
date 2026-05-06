@@ -1,30 +1,184 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Room } from "colyseus.js";
+import { TASK_LABELS, type RolePayload, type TaskType } from "@house/shared";
 import { mountGame, type GameHandle } from "../game/mountGame.js";
+import { useRoomState } from "./useRoomState.js";
+import { RoleReveal } from "./RoleReveal.js";
+import { SabotagePanel } from "./SabotagePanel.js";
+import { Whispers } from "./Whispers.js";
 
 interface Props {
   room: Room;
+  role: RolePayload | null;
 }
 
-export function GameScreen({ room }: Props) {
+interface ActiveInteraction {
+  taskType: TaskType;
+  progress: number;
+}
+
+export function GameScreen({ room, role }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const handleRef = useRef<GameHandle | null>(null);
+  const [ping, setPing] = useState<number | null>(null);
+  const [interaction, setInteraction] = useState<ActiveInteraction | null>(null);
+  const [prompt, setPrompt] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const view = useRoomState(room);
 
   useEffect(() => {
     if (!containerRef.current) return;
-    handleRef.current = mountGame(containerRef.current, room);
+    handleRef.current = mountGame(
+      containerRef.current,
+      room,
+      { setPing },
+      { setActive: setInteraction, setPrompt },
+    );
     return () => {
       handleRef.current?.destroy();
       handleRef.current = null;
     };
   }, [room]);
 
+  // 4Hz wall clock for sabotage cooldowns / effect timers.
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 250);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const playerNames = useMemo(() => {
+    const m = new Map<string, string>();
+    view?.players.forEach((p) => m.set(p.id, p.name));
+    return m;
+  }, [view]);
+
+  const showReveal = role != null && view?.phase === "reveal";
+  const showEnded = view?.phase === "ended";
+  const isCorrupted = role?.role === "corrupted";
+
+  const lightsOutMs = (view?.lightsOutExpiresAt ?? 0) - now;
+  const doorLockMs = (view?.doorLockExpiresAt ?? 0) - now;
+
   return (
     <div className="game-shell">
-      <div
-        ref={containerRef}
-        style={{ width: 960, height: 540, background: "#0a0910" }}
-      />
+      <div ref={containerRef} className="game-canvas" />
+
+      {lightsOutMs > 0 && <div className="lights-out-vignette" />}
+
+      <div className="hud-debug">
+        <div className="hud-row">
+          <span className="hud-label">Room</span>
+          <span className="hud-value mono">{view?.code ?? "…"}</span>
+        </div>
+        <div className="hud-row">
+          <span className="hud-label">Players</span>
+          <span className="hud-value">{view?.players.length ?? 0}</span>
+        </div>
+        <div className="hud-row">
+          <span className="hud-label">Ping</span>
+          <span className="hud-value">
+            {ping == null ? "—" : `${ping} ms`}
+          </span>
+        </div>
+        <div className="hud-row">
+          <span className="hud-label">Phase</span>
+          <span className="hud-value">{view?.phase ?? "—"}</span>
+        </div>
+        <div className="hud-hint">WASD — move • E — interact</div>
+      </div>
+
+      <div className="hud-meters">
+        <div className="hud-meter">
+          <div className="hud-meter-label">
+            <span>Seal Progress</span>
+            <span>{view?.sealProgress ?? 0}%</span>
+          </div>
+          <div className="hud-meter-bar">
+            <div
+              className="hud-meter-fill seal"
+              style={{ width: `${view?.sealProgress ?? 0}%` }}
+            />
+          </div>
+        </div>
+        <div className="hud-meter">
+          <div className="hud-meter-label">
+            <span>Haunt</span>
+            <span>{view?.hauntLevel ?? 0}%</span>
+          </div>
+          <div className="hud-meter-bar">
+            <div
+              className="hud-meter-fill haunt"
+              style={{ width: `${view?.hauntLevel ?? 0}%` }}
+            />
+          </div>
+        </div>
+      </div>
+
+      {role && (
+        <div className="role-badge" style={{ color: roleColor(role.role) }}>
+          {role.role}
+        </div>
+      )}
+
+      {(lightsOutMs > 0 || doorLockMs > 0) && (
+        <div className="effects-strip">
+          {lightsOutMs > 0 && (
+            <div className="effect-chip lights">
+              Lights out · {Math.ceil(lightsOutMs / 1000)}s
+            </div>
+          )}
+          {doorLockMs > 0 && (
+            <div className="effect-chip doors">
+              Doors locked · {Math.ceil(doorLockMs / 1000)}s
+            </div>
+          )}
+        </div>
+      )}
+
+      {prompt && !interaction && (
+        <div className="interact-prompt">{prompt}</div>
+      )}
+
+      {interaction && (
+        <div className="interact-bar">
+          <div className="interact-bar-label">
+            {TASK_LABELS[interaction.taskType]}
+          </div>
+          <div className="interact-bar-track">
+            <div
+              className="interact-bar-fill"
+              style={{ width: `${interaction.progress * 100}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      <Whispers room={room} />
+
+      {isCorrupted && view && (
+        <SabotagePanel room={room} cooldowns={view.sabotageCooldowns} />
+      )}
+
+      {showReveal && <RoleReveal payload={role} playerNames={playerNames} />}
+
+      {showEnded && (
+        <div className="end-banner">
+          <div className="end-eyebrow">Match ended</div>
+          <div className="end-title">
+            {view?.winner === "survivors"
+              ? "Survivors sealed the house"
+              : view?.winner === "corrupted"
+                ? "The house has chosen"
+                : "Match ended"}
+          </div>
+        </div>
+      )}
     </div>
   );
+}
+
+function roleColor(role: RolePayload["role"]): string {
+  if (role === "survivor") return "#7bff5e";
+  if (role === "corrupted") return "#ff5e5e";
+  return "#c45eff";
 }
