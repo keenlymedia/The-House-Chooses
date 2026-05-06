@@ -7,6 +7,7 @@ import { RoleReveal } from "./RoleReveal.js";
 import { SabotagePanel } from "./SabotagePanel.js";
 import { Whispers } from "./Whispers.js";
 import { MeetingOverlay } from "./MeetingOverlay.js";
+import { RitualOverlay } from "./RitualOverlay.js";
 
 interface Props {
   room: Room;
@@ -58,6 +59,7 @@ export function GameScreen({ room, role }: Props) {
   const isCorrupted = role?.role === "corrupted";
   const inMeeting =
     view?.phase === "meeting" || view?.phase === "voting";
+  const inRitual = view?.phase === "ritual";
   const self = view?.players.find((p) => p.id === view.selfId);
   const selfAlive = !!self?.alive && !self?.banished;
 
@@ -160,7 +162,7 @@ export function GameScreen({ room, role }: Props) {
 
       <Whispers room={room} />
 
-      {isCorrupted && view && !inMeeting && (
+      {isCorrupted && view && !inMeeting && !inRitual && (
         <SabotagePanel room={room} cooldowns={view.sabotageCooldowns} />
       )}
 
@@ -173,6 +175,16 @@ export function GameScreen({ room, role }: Props) {
           selfVote={view.meeting.selfVote}
           players={view.players}
           meeting={view.meeting}
+        />
+      )}
+
+      {inRitual && view && (
+        <RitualOverlay
+          room={room}
+          view={view}
+          ritual={view.ritual}
+          players={view.players}
+          selfId={view.selfId}
         />
       )}
 

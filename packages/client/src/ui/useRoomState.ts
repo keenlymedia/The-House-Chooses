@@ -22,6 +22,20 @@ export interface MeetingView {
   selfVote: string | null;
 }
 
+export interface RitualView {
+  subPhase: string;
+  leaderId: string;
+  witnessId: string;
+  voteEndsAt: number;
+  drawEndsAt: number;
+  failedVotes: number;
+  sealCount: number;
+  awakenCount: number;
+  publicOutcome: string;
+  voters: Set<string>;
+  selfVote: "approve" | "reject" | null;
+}
+
 export interface RoomView {
   code: string;
   phase: string;
@@ -34,6 +48,7 @@ export interface RoomView {
   winner: string;
   players: PlayerView[];
   meeting: MeetingView;
+  ritual: RitualView;
   selfId: string;
 }
 
@@ -60,6 +75,18 @@ export function useRoomState(room: Room): RoomView | null {
           lastBanishedId: string;
           votes: { forEach: (cb: (v: string, k: string) => void) => void };
         };
+        ritual: {
+          subPhase: string;
+          leaderId: string;
+          witnessId: string;
+          voteEndsAt: number;
+          drawEndsAt: number;
+          failedVotes: number;
+          sealCount: number;
+          awakenCount: number;
+          publicOutcome: string;
+          votes: { forEach: (cb: (v: string, k: string) => void) => void };
+        };
       };
       const players: PlayerView[] = [];
       state.players.forEach((p) => {
@@ -78,11 +105,20 @@ export function useRoomState(room: Room): RoomView | null {
       state.sabotageCooldowns?.forEach((v, k) =>
         cooldowns.set(k as SabotageType, v),
       );
-      const voters = new Set<string>();
-      let selfVote: string | null = null;
+      const meetingVoters = new Set<string>();
+      let selfMeetingVote: string | null = null;
       state.meeting?.votes.forEach((target, voterId) => {
-        voters.add(voterId);
-        if (voterId === room.sessionId) selfVote = target;
+        meetingVoters.add(voterId);
+        if (voterId === room.sessionId) selfMeetingVote = target;
+      });
+      const ritualVoters = new Set<string>();
+      let selfRitualVote: "approve" | "reject" | null = null;
+      state.ritual?.votes.forEach((vote, voterId) => {
+        ritualVoters.add(voterId);
+        if (voterId === room.sessionId) {
+          selfRitualVote =
+            vote === "approve" || vote === "reject" ? vote : null;
+        }
       });
       return {
         code: state.code,
@@ -100,8 +136,21 @@ export function useRoomState(room: Room): RoomView | null {
           discussionEndsAt: state.meeting?.discussionEndsAt ?? 0,
           voteEndsAt: state.meeting?.voteEndsAt ?? 0,
           lastBanishedId: state.meeting?.lastBanishedId ?? "",
-          voters,
-          selfVote,
+          voters: meetingVoters,
+          selfVote: selfMeetingVote,
+        },
+        ritual: {
+          subPhase: state.ritual?.subPhase ?? "",
+          leaderId: state.ritual?.leaderId ?? "",
+          witnessId: state.ritual?.witnessId ?? "",
+          voteEndsAt: state.ritual?.voteEndsAt ?? 0,
+          drawEndsAt: state.ritual?.drawEndsAt ?? 0,
+          failedVotes: state.ritual?.failedVotes ?? 0,
+          sealCount: state.ritual?.sealCount ?? 0,
+          awakenCount: state.ritual?.awakenCount ?? 0,
+          publicOutcome: state.ritual?.publicOutcome ?? "",
+          voters: ritualVoters,
+          selfVote: selfRitualVote,
         },
         selfId: room.sessionId,
       };

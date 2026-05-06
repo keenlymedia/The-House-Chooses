@@ -36,6 +36,22 @@ export class Meeting extends Schema {
   @type("string") lastBanishedId = "";
 }
 
+export class Ritual extends Schema {
+  // "" | "nominate" | "vote" | "leaderDraw" | "witnessDraw" | "resolve"
+  @type("string") subPhase = "";
+  @type("string") leaderId = "";
+  @type("string") witnessId = "";
+  // voterId → "approve" | "reject"
+  @type({ map: "string" }) votes = new MapSchema<string>();
+  @type("number") voteEndsAt = 0;
+  @type("number") drawEndsAt = 0;
+  @type("number") failedVotes = 0;
+  @type("number") sealCount = 0;
+  @type("number") awakenCount = 0;
+  // Last resolved card type, broadcast publicly. "seal" | "awakening" | ""
+  @type("string") publicOutcome = "";
+}
+
 export class MatchState extends Schema {
   @type("string") code = "";
   @type("string") phase: Phase = "lobby";
@@ -48,5 +64,7 @@ export class MatchState extends Schema {
   @type({ map: Player }) players = new MapSchema<Player>();
   @type({ map: Task }) tasks = new MapSchema<Task>();
   @type(Meeting) meeting = new Meeting();
+  @type(Ritual) ritual = new Ritual();
+  @type("number") nextRitualAt = 0;
   @type("string") winner = "";
 }

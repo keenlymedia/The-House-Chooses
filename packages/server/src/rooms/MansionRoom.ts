@@ -2,8 +2,11 @@ import { Room, type Client } from "@colyseus/core";
 import {
   BELL_INTERACT_RADIUS,
   C2S,
+  FEAR_FROM_BANISH_WITNESS,
   FEAR_FROM_CURSE,
+  FEAR_FROM_FAILED_RITUAL,
   FOYER_BELL,
+  HAUNT_THRESHOLD_FULL,
   MAX_PLAYERS,
   MEETING_DISCUSSION_MS,
   MEETING_VOTE_MS,
@@ -11,6 +14,11 @@ import {
   PANICKED_FEAR_THRESHOLD,
   PLAYER_SPEED,
   REVEAL_DURATION_MS,
+  RITUAL_AWAKENING_TARGET,
+  RITUAL_DRAW_MS,
+  RITUAL_INTERVAL_MS,
+  RITUAL_SEAL_TARGET,
+  RITUAL_VOTE_MS,
   ROLE_DISTRIBUTION,
   S2C,
   SABOTAGE_TYPES,
@@ -23,6 +31,11 @@ import {
   spawnPositions,
   type MovePayload,
   type PingPayload,
+  type RitualCard,
+  type RitualCardIndexPayload,
+  type RitualHandPayload,
+  type RitualNominatePayload,
+  type RitualVotePayload,
   type RolePayload,
   type SabotageFlashPayload,
   type SabotagePayload,
@@ -43,6 +56,7 @@ import {
 import { buildTaskSchema, spawnTasksForMatch } from "../systems/tasks.js";
 import { applySabotage } from "../systems/sabotage.js";
 import { checkWin, tallyMeeting } from "../systems/meetings.js";
+import { LeaderQueue, RitualDeck, tallyRitualVote } from "../systems/ritual.js";
 
 interface JoinOptions {
   name?: string;
@@ -70,6 +84,12 @@ export class MansionRoom extends Room<MatchState> {
   private roles = new Map<string, RoleAssignment>();
   private interactions = new Map<string, Interaction>();
 
+  // Ritual side-game state — server-only.
+  private deck = new RitualDeck();
+  private leaderQueue = new LeaderQueue();
+  private leaderHand: RitualCard[] = [];
+  private witnessHand: RitualCard[] = [];
+
   onCreate(_options: unknown): void {
     this.code = generateCode();
     registerCode(this.code, this.roomId);
@@ -91,6 +111,18 @@ export class MansionRoom extends Room<MatchState> {
     this.onMessage(C2S.Sabotage, (c, p: SabotagePayload) => this.handleSabotage(c, p));
     this.onMessage(C2S.CallMeeting, (c) => this.handleCallMeeting(c));
     this.onMessage(C2S.Vote, (c, p: VotePayload) => this.handleVote(c, p));
+    this.onMessage(C2S.RitualNominate, (c, p: RitualNominatePayload) =>
+      this.handleRitualNominate(c, p),
+    );
+    this.onMessage(C2S.RitualVote, (c, p: RitualVotePayload) =>
+      this.handleRitualVote(c, p),
+    );
+    this.onMessage(C2S.RitualDiscard, (c, p: RitualCardIndexPayload) =>
+      this.handleRitualDiscard(c, p),
+    );
+    this.onMessage(C2S.RitualResolve, (c, p: RitualCardIndexPayload) =>
+      this.handleRitualResolve(c, p),
+    );
 
     this.setSimulationInterval((dt) => this.tick(dt / 1000), 1000 / TICK_HZ);
 
@@ -192,6 +224,7 @@ export class MansionRoom extends Room<MatchState> {
 
     const ids = Array.from(this.state.players.keys());
     this.roles = assignRoles(ids);
+    this.leaderQueue.initialize(ids);
 
     for (const c of this.clients) {
       const assignment = this.roles.get(c.sessionId);
@@ -202,7 +235,10 @@ export class MansionRoom extends Room<MatchState> {
 
     this.state.phase = "reveal";
     this.clock.setTimeout(() => {
-      if (this.state.phase === "reveal") this.state.phase = "playing";
+      if (this.state.phase === "reveal") {
+        this.state.phase = "playing";
+        this.state.nextRitualAt = Date.now() + RITUAL_INTERVAL_MS;
+      }
     }, REVEAL_DURATION_MS);
   }
 
@@ -378,9 +414,10 @@ export class MansionRoom extends Room<MatchState> {
         banished.alive = false;
         banished.banished = true;
         this.state.meeting.lastBanishedId = outcome.banishedId;
-        // Witnessing a banish bumps fear for everyone alive.
+        this.leaderQueue.remove(outcome.banishedId);
         this.state.players.forEach((p) => {
-          if (p.alive) p.fear = Math.min(100, p.fear + 8);
+          if (p.alive)
+            p.fear = Math.min(100, p.fear + FEAR_FROM_BANISH_WITNESS);
         });
       }
     }
@@ -400,6 +437,242 @@ export class MansionRoom extends Room<MatchState> {
     this.state.meeting.voteEndsAt = 0;
   }
 
+  // --- ritual --------------------------------------------------------------
+
+  private maybeStartRitual(): void {
+    if (this.state.phase !== "playing") return;
+    if (this.state.nextRitualAt === 0) return;
+    if (Date.now() < this.state.nextRitualAt) return;
+    this.startRitual();
+  }
+
+  private startRitual(): void {
+    this.interactions.clear();
+    for (const id of this.intents.keys()) {
+      this.intents.set(id, { dx: 0, dy: 0 });
+    }
+
+    const leader = this.leaderQueue.next(this.state);
+    if (!leader) {
+      // No alive players — shouldn't happen mid-match, but bail safely.
+      this.state.nextRitualAt = Date.now() + RITUAL_INTERVAL_MS;
+      return;
+    }
+
+    const r = this.state.ritual;
+    r.subPhase = "nominate";
+    r.leaderId = leader;
+    r.witnessId = "";
+    r.votes.clear();
+    r.voteEndsAt = 0;
+    r.drawEndsAt = 0;
+    r.publicOutcome = "";
+
+    this.state.phase = "ritual";
+    // No hard timer on nomination — leader picks at their pace. The vote
+    // timer below applies once a witness is selected.
+  }
+
+  private handleRitualNominate(
+    client: Client,
+    payload: RitualNominatePayload,
+  ): void {
+    if (this.state.phase !== "ritual") return;
+    const r = this.state.ritual;
+    if (r.subPhase !== "nominate") return;
+    if (client.sessionId !== r.leaderId) return;
+
+    const witnessId = String(payload?.witnessId ?? "");
+    if (witnessId === r.leaderId) return;
+    const witness = this.state.players.get(witnessId);
+    if (!witness?.alive || witness.banished) return;
+
+    r.witnessId = witnessId;
+    r.votes.clear();
+    r.voteEndsAt = Date.now() + RITUAL_VOTE_MS;
+    r.subPhase = "vote";
+
+    this.clock.setTimeout(() => {
+      if (
+        this.state.phase === "ritual" &&
+        this.state.ritual.subPhase === "vote" &&
+        this.state.ritual.witnessId === witnessId
+      ) {
+        this.resolveRitualVote();
+      }
+    }, RITUAL_VOTE_MS);
+  }
+
+  private handleRitualVote(
+    client: Client,
+    payload: RitualVotePayload,
+  ): void {
+    if (this.state.phase !== "ritual") return;
+    const r = this.state.ritual;
+    if (r.subPhase !== "vote") return;
+    const voter = this.state.players.get(client.sessionId);
+    if (!voter?.alive || voter.banished) return;
+    const v = payload?.vote;
+    if (v !== "approve" && v !== "reject") return;
+    if (r.votes.has(client.sessionId)) return;
+    r.votes.set(client.sessionId, v);
+
+    if (r.votes.size >= countAlive(this.state)) this.resolveRitualVote();
+  }
+
+  private resolveRitualVote(): void {
+    const r = this.state.ritual;
+    if (this.state.phase !== "ritual" || r.subPhase !== "vote") return;
+    const outcome = tallyRitualVote(this.state);
+    if (outcome === "reject") {
+      r.failedVotes += 1;
+      r.subPhase = "resolve";
+      r.publicOutcome = "rejected";
+      // Failure: bump fear for everyone alive, bump haunt slightly, rotate.
+      this.state.players.forEach((p) => {
+        if (p.alive && !p.banished) {
+          p.fear = Math.min(100, p.fear + FEAR_FROM_FAILED_RITUAL);
+        }
+      });
+      this.endRitualAfterFlash();
+      return;
+    }
+
+    // Approval: instant Corrupted win if Vessel-as-witness at full haunt.
+    const witnessRole = this.roles.get(r.witnessId)?.role;
+    if (
+      witnessRole === "vessel" &&
+      this.state.hauntLevel >= HAUNT_THRESHOLD_FULL
+    ) {
+      this.state.phase = "ended";
+      this.state.winner = "corrupted";
+      r.subPhase = "resolve";
+      r.publicOutcome = "vessel_witness";
+      return;
+    }
+
+    // Draw 3 cards privately to the leader.
+    this.leaderHand = this.deck.draw(3);
+    r.subPhase = "leaderDraw";
+    r.drawEndsAt = Date.now() + RITUAL_DRAW_MS;
+    const leaderClient = this.clients.find(
+      (c) => c.sessionId === r.leaderId,
+    );
+    if (leaderClient) {
+      const payload: RitualHandPayload = { cards: [...this.leaderHand] };
+      leaderClient.send(S2C.RitualLeaderHand, payload);
+    }
+
+    this.clock.setTimeout(() => {
+      if (
+        this.state.phase === "ritual" &&
+        this.state.ritual.subPhase === "leaderDraw"
+      ) {
+        // Leader timed out: discard the first card to keep the game moving.
+        this.applyLeaderDiscard(0);
+      }
+    }, RITUAL_DRAW_MS);
+  }
+
+  private handleRitualDiscard(
+    client: Client,
+    payload: RitualCardIndexPayload,
+  ): void {
+    if (this.state.phase !== "ritual") return;
+    const r = this.state.ritual;
+    if (r.subPhase !== "leaderDraw") return;
+    if (client.sessionId !== r.leaderId) return;
+    const idx = Number(payload?.cardIndex ?? -1);
+    if (!Number.isInteger(idx) || idx < 0 || idx >= this.leaderHand.length) {
+      return;
+    }
+    this.applyLeaderDiscard(idx);
+  }
+
+  private applyLeaderDiscard(idx: number): void {
+    const r = this.state.ritual;
+    if (r.subPhase !== "leaderDraw") return;
+    if (idx < 0 || idx >= this.leaderHand.length) return;
+
+    this.leaderHand.splice(idx, 1);
+    this.witnessHand = [...this.leaderHand];
+    this.leaderHand = [];
+
+    r.subPhase = "witnessDraw";
+    r.drawEndsAt = Date.now() + RITUAL_DRAW_MS;
+    const witnessClient = this.clients.find(
+      (c) => c.sessionId === r.witnessId,
+    );
+    if (witnessClient) {
+      const payload: RitualHandPayload = { cards: [...this.witnessHand] };
+      witnessClient.send(S2C.RitualWitnessHand, payload);
+    }
+
+    this.clock.setTimeout(() => {
+      if (
+        this.state.phase === "ritual" &&
+        this.state.ritual.subPhase === "witnessDraw"
+      ) {
+        this.applyWitnessResolve(0);
+      }
+    }, RITUAL_DRAW_MS);
+  }
+
+  private handleRitualResolve(
+    client: Client,
+    payload: RitualCardIndexPayload,
+  ): void {
+    if (this.state.phase !== "ritual") return;
+    const r = this.state.ritual;
+    if (r.subPhase !== "witnessDraw") return;
+    if (client.sessionId !== r.witnessId) return;
+    const idx = Number(payload?.cardIndex ?? -1);
+    if (!Number.isInteger(idx) || idx < 0 || idx >= this.witnessHand.length) {
+      return;
+    }
+    this.applyWitnessResolve(idx);
+  }
+
+  private applyWitnessResolve(idx: number): void {
+    const r = this.state.ritual;
+    if (r.subPhase !== "witnessDraw") return;
+    if (idx < 0 || idx >= this.witnessHand.length) return;
+
+    const card = this.witnessHand[idx];
+    this.witnessHand = [];
+    r.subPhase = "resolve";
+    r.publicOutcome = card;
+
+    if (card === "seal") r.sealCount += 1;
+    else r.awakenCount += 1;
+
+    if (r.sealCount >= RITUAL_SEAL_TARGET) {
+      this.state.phase = "ended";
+      this.state.winner = "survivors";
+      return;
+    }
+    if (r.awakenCount >= RITUAL_AWAKENING_TARGET) {
+      this.state.phase = "ended";
+      this.state.winner = "corrupted";
+      return;
+    }
+
+    this.endRitualAfterFlash();
+  }
+
+  private endRitualAfterFlash(): void {
+    this.clock.setTimeout(() => {
+      if (this.state.phase !== "ritual") return;
+      this.state.ritual.subPhase = "";
+      this.state.ritual.witnessId = "";
+      this.state.ritual.votes.clear();
+      this.state.ritual.voteEndsAt = 0;
+      this.state.ritual.drawEndsAt = 0;
+      this.state.phase = "playing";
+      this.state.nextRitualAt = Date.now() + RITUAL_INTERVAL_MS;
+    }, 4000);
+  }
+
   // --- internals -----------------------------------------------------------
 
   private sendRole(client: Client, assignment: RoleAssignment): void {
@@ -411,6 +684,8 @@ export class MansionRoom extends Room<MatchState> {
   }
 
   private tick(dt: number): void {
+    this.maybeStartRitual();
+
     if (this.state.phase !== "playing" && this.state.phase !== "reveal") return;
 
     const now = Date.now();

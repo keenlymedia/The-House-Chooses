@@ -11,6 +11,10 @@ export const C2S = {
   Sabotage: "sabotage",
   CallMeeting: "callMeeting",
   Vote: "vote",
+  RitualNominate: "ritualNominate",
+  RitualVote: "ritualVote",
+  RitualDiscard: "ritualDiscard",
+  RitualResolve: "ritualResolve",
 } as const;
 
 // Server → client message types
@@ -21,6 +25,8 @@ export const S2C = {
   Pong: "pong",
   Whisper: "whisper",
   SabotageFlash: "sabotageFlash",
+  RitualLeaderHand: "ritualLeaderHand",
+  RitualWitnessHand: "ritualWitnessHand",
 } as const;
 
 export interface RolePayload {
@@ -80,4 +86,22 @@ export interface SabotageFlashPayload {
 export interface VotePayload {
   // Either a sessionId or "skip".
   target: string;
+}
+
+export type RitualCard = "seal" | "awakening";
+
+export interface RitualNominatePayload {
+  witnessId: string;
+}
+
+export interface RitualVotePayload {
+  vote: "approve" | "reject";
+}
+
+export interface RitualCardIndexPayload {
+  cardIndex: number;
+}
+
+export interface RitualHandPayload {
+  cards: RitualCard[];
 }
