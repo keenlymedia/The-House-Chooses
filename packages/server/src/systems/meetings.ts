@@ -1,4 +1,4 @@
-import { SKIP_VOTE } from "@house/shared";
+import { HAUNT_FULL, SKIP_VOTE, type WinReason } from "@house/shared";
 import { MatchState } from "../state/MatchState.js";
 import type { RoleAssignment } from "./roles.js";
 
@@ -37,31 +37,51 @@ export function tallyMeeting(state: MatchState): BanishOutcome {
 
 export interface WinCheckResult {
   winner: "" | "survivors" | "corrupted";
+  reason: WinReason | "";
 }
 
-// After a banishment or kill, check whether the match should end.
-// Survivors win iff every Corrupted AND the Vessel is dead/banished.
-// Corrupted win iff alive corrupted-aligned >= alive survivors.
+// Centralized win-condition check, called after every event that can change
+// the outcome (banish, kill, sabotage haunt bump, ritual resolution, task).
+// Order matters: most decisive conditions first.
 export function checkWin(
   state: MatchState,
   roles: Map<string, RoleAssignment>,
 ): WinCheckResult {
+  // 1. Vessel banished → Survivors win immediately.
+  let vesselAlive = false;
+  let vesselBanished = false;
+  state.players.forEach((p, id) => {
+    if (roles.get(id)?.role !== "vessel") return;
+    if (p.banished) vesselBanished = true;
+    else if (p.alive) vesselAlive = true;
+  });
+  if (vesselBanished) return { winner: "survivors", reason: "vessel_banished" };
+
+  // 2. Haunt at max → Corrupted win.
+  if (state.hauntLevel >= HAUNT_FULL) {
+    return { winner: "corrupted", reason: "haunt_max" };
+  }
+
+  // 3. Population check.
   let aliveSurvivors = 0;
   let aliveCorrupted = 0;
-  let vesselAlive = false;
   state.players.forEach((p, id) => {
-    if (!p.alive) return;
+    if (!p.alive || p.banished) return;
     const role = roles.get(id)?.role;
     if (role === "survivor") aliveSurvivors++;
     else if (role === "corrupted") aliveCorrupted++;
-    else if (role === "vessel") vesselAlive = true;
   });
 
+  // All Corrupted aligned eliminated → Survivors win.
   if (aliveCorrupted === 0 && !vesselAlive) {
-    return { winner: "survivors" };
+    return { winner: "survivors", reason: "all_corrupted_eliminated" };
   }
-  if (aliveCorrupted + (vesselAlive ? 1 : 0) >= aliveSurvivors) {
-    return { winner: "corrupted" };
+
+  // Corrupted aligned >= Survivors → Corrupted win.
+  const corruptedSide = aliveCorrupted + (vesselAlive ? 1 : 0);
+  if (corruptedSide >= aliveSurvivors && aliveSurvivors > 0) {
+    return { winner: "corrupted", reason: "corrupted_outnumber" };
   }
-  return { winner: "" };
+
+  return { winner: "", reason: "" };
 }

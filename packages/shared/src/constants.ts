@@ -24,8 +24,11 @@ export const RITUAL_DECK_SEAL = 11;
 export const RITUAL_DECK_AWAKENING = 17;
 
 // Win-track targets for the ritual side-game.
-export const RITUAL_SEAL_TARGET = 4;
-export const RITUAL_AWAKENING_TARGET = 5;
+export const RITUAL_SEAL_TARGET = 5;
+export const RITUAL_AWAKENING_TARGET = 6;
+
+// Haunt full = global haunting wins for Corrupted.
+export const HAUNT_FULL = 100;
 
 // If the Vessel is approved as Second Witness while haunt >= this, the
 // Corrupted win instantly. 75 ≈ "haunt level 3" on the legacy 0..3 scale.

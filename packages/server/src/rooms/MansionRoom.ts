@@ -39,6 +39,7 @@ import {
   type RitualNominatePayload,
   type RitualVotePayload,
   type RolePayload,
+  type RoleRevealPayload,
   type SabotageFlashPayload,
   type SabotagePayload,
   type SabotageType,
@@ -47,6 +48,7 @@ import {
   type TileGrid,
   type VotePayload,
   type WhisperPayload,
+  type WinReason,
 } from "@house/shared";
 import { MatchState, Player } from "../state/MatchState.js";
 import { generateCode, registerCode, releaseCode } from "./roomCodes.js";
@@ -130,6 +132,7 @@ export class MansionRoom extends Room<MatchState> {
     this.onMessage(C2S.RitualResolve, (c, p: RitualCardIndexPayload) =>
       this.handleRitualResolve(c, p),
     );
+    this.onMessage(C2S.RestartLobby, (c) => this.handleRestartLobby(c));
 
     this.setSimulationInterval((dt) => this.tick(dt / 1000), 1000 / TICK_HZ);
 
@@ -308,9 +311,10 @@ export class MansionRoom extends Room<MatchState> {
     );
 
     if (this.state.sealProgress >= 100) {
-      this.state.phase = "ended";
-      this.state.winner = "survivors";
+      this.concludeMatch("survivors", "seal_track");
+      return;
     }
+    this.checkAndMaybeConclude();
   }
 
   private handleSabotage(client: Client, payload: SabotagePayload): void {
@@ -350,6 +354,9 @@ export class MansionRoom extends Room<MatchState> {
     }
     const flash: SabotageFlashPayload = { type };
     this.broadcast(S2C.SabotageFlash, flash);
+
+    // A sabotage may have pushed haunt to max.
+    this.checkAndMaybeConclude();
   }
 
   // --- meetings ------------------------------------------------------------
@@ -440,16 +447,13 @@ export class MansionRoom extends Room<MatchState> {
 
     const win = checkWin(this.state, this.roles);
     if (win.winner) {
-      this.state.phase = "ended";
-      this.state.winner = win.winner;
+      this.concludeMatch(win.winner, win.reason || "corrupted_outnumber");
       return;
     }
 
-    // Resume play after a short pause so clients can show the outcome banner.
     this.clock.setTimeout(() => {
       if (this.state.phase !== "ended") this.state.phase = "playing";
     }, 4000);
-    // Mark voting closed but keep meeting payload visible until phase swaps.
     this.state.meeting.voteEndsAt = 0;
   }
 
@@ -560,10 +564,9 @@ export class MansionRoom extends Room<MatchState> {
       witnessRole === "vessel" &&
       this.state.hauntLevel >= HAUNT_THRESHOLD_FULL
     ) {
-      this.state.phase = "ended";
-      this.state.winner = "corrupted";
       r.subPhase = "resolve";
       r.publicOutcome = "vessel_witness";
+      this.concludeMatch("corrupted", "vessel_witness");
       return;
     }
 
@@ -670,13 +673,11 @@ export class MansionRoom extends Room<MatchState> {
     } else r.awakenCount += 1;
 
     if (r.sealCount >= RITUAL_SEAL_TARGET) {
-      this.state.phase = "ended";
-      this.state.winner = "survivors";
+      this.concludeMatch("survivors", "seal_track");
       return;
     }
     if (r.awakenCount >= RITUAL_AWAKENING_TARGET) {
-      this.state.phase = "ended";
-      this.state.winner = "corrupted";
+      this.concludeMatch("corrupted", "awakening_track");
       return;
     }
 
@@ -694,6 +695,105 @@ export class MansionRoom extends Room<MatchState> {
       this.state.phase = "playing";
       this.state.nextRitualAt = Date.now() + RITUAL_INTERVAL_MS;
     }, 4000);
+  }
+
+  // --- match end + restart -------------------------------------------------
+
+  private checkAndMaybeConclude(): void {
+    if (this.state.phase === "ended") return;
+    const win = checkWin(this.state, this.roles);
+    if (!win.winner) return;
+    this.concludeMatch(win.winner, win.reason || "corrupted_outnumber");
+  }
+
+  private concludeMatch(
+    winner: "survivors" | "corrupted",
+    reason: WinReason,
+  ): void {
+    if (this.state.phase === "ended") return;
+
+    this.state.phase = "ended";
+    this.state.winner = winner;
+    this.state.winReason = reason;
+
+    // Reveal every role to every client. Roles are still NOT in shared state;
+    // this single broadcast contains them and clients render the lineup.
+    const roleMap: Record<string, "survivor" | "corrupted" | "vessel"> = {};
+    this.roles.forEach((assignment, id) => {
+      roleMap[id] = assignment.role;
+    });
+    const payload: RoleRevealPayload = { roles: roleMap, winner, reason };
+    this.broadcast(S2C.RoleReveal, payload);
+  }
+
+  private handleRestartLobby(client: Client): void {
+    const player = this.state.players.get(client.sessionId);
+    if (!player?.isHost) {
+      client.send(S2C.Error, { reason: "not_host" });
+      return;
+    }
+    if (this.state.phase !== "ended") return;
+    this.resetForRestart();
+  }
+
+  private resetForRestart(): void {
+    // Clear server-only systems.
+    this.roles.clear();
+    this.interactions.clear();
+    this.intents.clear();
+    this.leaderQueue = new LeaderQueue();
+    this.deck = new RitualDeck();
+    this.fear = new FearSystem();
+    this.leaderHand = [];
+    this.witnessHand = [];
+    this.fearAccumMs = 0;
+
+    // Reset shared state.
+    this.state.phase = "lobby";
+    this.state.winner = "";
+    this.state.winReason = "";
+    this.state.hauntLevel = 0;
+    this.state.sealProgress = 0;
+    this.state.totalTasks = 0;
+    this.state.doorLockExpiresAt = 0;
+    this.state.lightsOutExpiresAt = 0;
+    this.state.nextRitualAt = 0;
+    this.state.tasks.clear();
+    this.state.sabotageCooldowns.clear();
+
+    const m = this.state.meeting;
+    m.calledBy = "";
+    m.discussionEndsAt = 0;
+    m.voteEndsAt = 0;
+    m.lastBanishedId = "";
+    m.votes.clear();
+
+    const r = this.state.ritual;
+    r.subPhase = "";
+    r.leaderId = "";
+    r.witnessId = "";
+    r.voteEndsAt = 0;
+    r.drawEndsAt = 0;
+    r.failedVotes = 0;
+    r.sealCount = 0;
+    r.awakenCount = 0;
+    r.publicOutcome = "";
+    r.votes.clear();
+
+    // Reset players: alive, fear=0, ready=false, respawn at the foyer.
+    const positions = spawnPositions();
+    let i = 0;
+    this.state.players.forEach((p) => {
+      p.alive = true;
+      p.banished = false;
+      p.fear = 0;
+      p.ready = false;
+      const spawn = positions[i % positions.length];
+      p.x = spawn.x;
+      p.y = spawn.y;
+      this.intents.set(p.id, { dx: 0, dy: 0 });
+      i++;
+    });
   }
 
   // --- internals -----------------------------------------------------------

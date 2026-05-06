@@ -15,6 +15,7 @@ export const C2S = {
   RitualVote: "ritualVote",
   RitualDiscard: "ritualDiscard",
   RitualResolve: "ritualResolve",
+  RestartLobby: "restartLobby",
 } as const;
 
 // Server → client message types
@@ -27,6 +28,7 @@ export const S2C = {
   SabotageFlash: "sabotageFlash",
   RitualLeaderHand: "ritualLeaderHand",
   RitualWitnessHand: "ritualWitnessHand",
+  RoleReveal: "roleReveal",
 } as const;
 
 export interface RolePayload {
@@ -104,4 +106,21 @@ export interface RitualCardIndexPayload {
 
 export interface RitualHandPayload {
   cards: RitualCard[];
+}
+
+export type WinReason =
+  | "seal_track"
+  | "awakening_track"
+  | "vessel_banished"
+  | "vessel_witness"
+  | "corrupted_outnumber"
+  | "haunt_max"
+  | "all_corrupted_eliminated";
+
+// Sent once when phase becomes "ended". Contains every player's role so the
+// final reveal screen can show the full lineup.
+export interface RoleRevealPayload {
+  roles: Record<string, "survivor" | "corrupted" | "vessel">;
+  winner: "survivors" | "corrupted";
+  reason: WinReason;
 }
