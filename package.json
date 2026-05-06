@@ -1,0 +1,22 @@
+{
+  "name": "the-house-chooses",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Browser multiplayer horror social deduction game",
+  "workspaces": [
+    "packages/shared",
+    "packages/server",
+    "packages/client"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "dev:server": "npm run dev --workspace @house/server",
+    "dev:client": "npm run dev --workspace @house/client",
+    "dev": "npm-run-all --parallel dev:server dev:client",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "devDependencies": {
+    "npm-run-all": "^4.1.5",
+    "typescript": "^5.5.4"
+  }
+}
