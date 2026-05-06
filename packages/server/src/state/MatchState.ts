@@ -67,4 +67,5 @@ export class MatchState extends Schema {
   @type(Ritual) ritual = new Ritual();
   @type("number") nextRitualAt = 0;
   @type("string") winner = "";
+  @type("string") winReason = "";
 }

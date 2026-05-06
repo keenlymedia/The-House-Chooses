@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Room } from "colyseus.js";
-import { TASK_LABELS, type RolePayload, type TaskType } from "@house/shared";
+import {
+  TASK_LABELS,
+  type RolePayload,
+  type RoleRevealPayload,
+  type TaskType,
+} from "@house/shared";
 import { mountGame, type GameHandle } from "../game/mountGame.js";
 import { useRoomState } from "./useRoomState.js";
 import { RoleReveal } from "./RoleReveal.js";
@@ -8,10 +13,12 @@ import { SabotagePanel } from "./SabotagePanel.js";
 import { Whispers } from "./Whispers.js";
 import { MeetingOverlay } from "./MeetingOverlay.js";
 import { RitualOverlay } from "./RitualOverlay.js";
+import { EndScreen } from "./EndScreen.js";
 
 interface Props {
   room: Room;
   role: RolePayload | null;
+  reveal: RoleRevealPayload | null;
 }
 
 interface ActiveInteraction {
@@ -19,7 +26,7 @@ interface ActiveInteraction {
   progress: number;
 }
 
-export function GameScreen({ room, role }: Props) {
+export function GameScreen({ room, role, reveal }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const handleRef = useRef<GameHandle | null>(null);
   const [ping, setPing] = useState<number | null>(null);
@@ -42,7 +49,6 @@ export function GameScreen({ room, role }: Props) {
     };
   }, [room]);
 
-  // 4Hz wall clock for sabotage cooldowns / effect timers.
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 250);
     return () => window.clearInterval(id);
@@ -55,13 +61,13 @@ export function GameScreen({ room, role }: Props) {
   }, [view]);
 
   const showReveal = role != null && view?.phase === "reveal";
-  const showEnded = view?.phase === "ended";
+  const showEnded = view?.phase === "ended" && reveal != null;
   const isCorrupted = role?.role === "corrupted";
-  const inMeeting =
-    view?.phase === "meeting" || view?.phase === "voting";
+  const inMeeting = view?.phase === "meeting" || view?.phase === "voting";
   const inRitual = view?.phase === "ritual";
   const self = view?.players.find((p) => p.id === view.selfId);
   const selfAlive = !!self?.alive && !self?.banished;
+  const isHost = !!self?.isHost;
   const selfFear = self?.fear ?? 0;
   const fearTier = fearTierFor(selfFear);
 
@@ -123,7 +129,9 @@ export function GameScreen({ room, role }: Props) {
         </div>
         <div className="hud-meter">
           <div className="hud-meter-label">
-            <span>Fear {fearTier === "panic" && <em>· panicked</em>}</span>
+            <span>
+              Fear {fearTier === "panic" && <em>· panicked</em>}
+            </span>
             <span>{Math.round(selfFear)}%</span>
           </div>
           <div className="hud-meter-bar">
@@ -176,7 +184,7 @@ export function GameScreen({ room, role }: Props) {
 
       <Whispers room={room} />
 
-      {isCorrupted && view && !inMeeting && !inRitual && (
+      {isCorrupted && view && !inMeeting && !inRitual && !showEnded && (
         <SabotagePanel room={room} cooldowns={view.sabotageCooldowns} />
       )}
 
@@ -204,17 +212,13 @@ export function GameScreen({ room, role }: Props) {
 
       {showReveal && <RoleReveal payload={role} playerNames={playerNames} />}
 
-      {showEnded && (
-        <div className="end-banner">
-          <div className="end-eyebrow">Match ended</div>
-          <div className="end-title">
-            {view?.winner === "survivors"
-              ? "Survivors sealed the house"
-              : view?.winner === "corrupted"
-                ? "The house has chosen"
-                : "Match ended"}
-          </div>
-        </div>
+      {showEnded && view && (
+        <EndScreen
+          room={room}
+          reveal={reveal}
+          players={view.players}
+          isHost={isHost}
+        />
       )}
     </div>
   );

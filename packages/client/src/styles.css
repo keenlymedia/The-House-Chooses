@@ -1008,6 +1008,148 @@ button.secondary:hover:not(:disabled) {
   font-style: italic;
 }
 
+.end-shell {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 4, 8, 0.94);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 90;
+  backdrop-filter: blur(10px);
+  animation: revealIn 360ms ease-out;
+}
+
+.end-card {
+  width: min(520px, 92vw);
+  padding: 30px 28px;
+  background: #0d0c10;
+  border: 2px solid #2a2530;
+  border-radius: 14px;
+  text-align: center;
+}
+
+.end-card.survivors {
+  border-color: #7bff5e;
+  box-shadow: 0 0 40px rgba(123, 255, 94, 0.18);
+}
+
+.end-card.corrupted {
+  border-color: #ff5e5e;
+  box-shadow: 0 0 40px rgba(255, 94, 94, 0.18);
+}
+
+.end-eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.4em;
+  text-transform: uppercase;
+  color: #6b6478;
+  margin-bottom: 14px;
+}
+
+.end-title {
+  margin: 0 0 8px;
+  font-size: 28px;
+  letter-spacing: 0.04em;
+}
+
+.end-reason {
+  margin: 0 0 22px;
+  color: #c8c4d0;
+  font-size: 13px;
+  font-style: italic;
+}
+
+.end-lineup-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: #6b6478;
+  margin-bottom: 10px;
+}
+
+.end-lineup {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 20px;
+  text-align: left;
+}
+
+.end-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid #2a2530;
+  border-radius: 6px;
+  margin-bottom: 4px;
+  font-size: 13px;
+}
+
+.end-pip {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.end-name {
+  flex: 1;
+}
+
+.end-tag {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  padding: 2px 6px;
+  background: #2a2530;
+  color: #8c869a;
+  border-radius: 3px;
+}
+
+.end-role {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-weight: 700;
+}
+
+.end-role.role-survivor {
+  color: #7bff5e;
+}
+
+.end-role.role-corrupted {
+  color: #ff5e5e;
+}
+
+.end-role.role-vessel {
+  color: #c45eff;
+}
+
+.end-restart {
+  width: 100%;
+  padding: 12px;
+  background: #6b3fa0;
+  border: none;
+  border-radius: 8px;
+  color: white;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+}
+
+.end-restart:hover {
+  background: #7c4eb5;
+}
+
+.end-wait {
+  color: #6b6478;
+  font-size: 12px;
+  font-style: italic;
+}
+
 .interact-prompt {
   position: absolute;
   bottom: 130px;
